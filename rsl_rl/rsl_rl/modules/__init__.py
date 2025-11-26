@@ -20,6 +20,7 @@
 
 from .actor_critic import ActorCritic
 from .actor_critic_recurrent import ActorCriticRecurrent
+from .ddpg_actor_critic import DDPGActorCritic
 from .discriminator import Discriminator
 from .normalizer import EmpiricalNormalization
 from .rnd import RandomNetworkDistillation
@@ -29,6 +30,7 @@ from .student_teacher_recurrent import StudentTeacherRecurrent
 __all__ = [
     "ActorCritic",
     "ActorCriticRecurrent",
+    "DDPGActorCritic",
     "EmpiricalNormalization",
     "RandomNetworkDistillation",
     "StudentTeacher",
