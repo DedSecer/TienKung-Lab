@@ -50,9 +50,11 @@ class BaseSceneCfg:
     max_episode_length_s: float = 20.0
     num_envs: int = 4096
     env_spacing: float = 2.5
+    seed: int = 42
     robot: ArticulationCfg = MISSING
     terrain_type: str = MISSING
     terrain_generator: TerrainGeneratorCfg = None
+    usd_path: str = None  # Path to USD environment file when terrain_type is "usd"
     max_init_terrain_level: int = 5
     height_scanner: HeightScannerCfg = HeightScannerCfg()
     lidar: LidarCfg = LidarCfg()

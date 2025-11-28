@@ -40,25 +40,34 @@ class SceneCfg(InteractiveSceneCfg):
     def __init__(self, config: "BaseSceneCfg", physics_dt, step_dt):
         super().__init__(num_envs=config.num_envs, env_spacing=config.env_spacing)
 
-        self.terrain = TerrainImporterCfg(
-            prim_path="/World/ground",
-            terrain_type=config.terrain_type,
-            terrain_generator=config.terrain_generator,
-            max_init_terrain_level=config.max_init_terrain_level,
-            collision_group=-1,
-            physics_material=sim_utils.RigidBodyMaterialCfg(
+        # Build terrain configuration based on terrain type
+        terrain_kwargs = {
+            "prim_path": "/World/ground",
+            "terrain_type": config.terrain_type,
+            "collision_group": -1,
+            "physics_material": sim_utils.RigidBodyMaterialCfg(
                 friction_combine_mode="multiply",
                 restitution_combine_mode="multiply",
                 static_friction=1.0,
                 dynamic_friction=1.0,
             ),
-            visual_material=sim_utils.MdlFileCfg(
+            "debug_vis": False,
+        }
+
+        # Add USD path if using USD terrain type
+        if config.terrain_type == "usd" and hasattr(config, "usd_path") and config.usd_path is not None:
+            terrain_kwargs["usd_path"] = config.usd_path
+        else:
+            # For non-USD terrains, add generator and visual material
+            terrain_kwargs["terrain_generator"] = config.terrain_generator
+            terrain_kwargs["max_init_terrain_level"] = config.max_init_terrain_level
+            terrain_kwargs["visual_material"] = sim_utils.MdlFileCfg(
                 mdl_path=f"{ISAACLAB_NUCLEUS_DIR}/Materials/TilesMarbleSpiderWhiteBrickBondHoned/TilesMarbleSpiderWhiteBrickBondHoned.mdl",
                 project_uvw=True,
                 texture_scale=(0.25, 0.25),
-            ),
-            debug_vis=False,
-        )
+            )
+
+        self.terrain = TerrainImporterCfg(**terrain_kwargs)
 
         self.robot: ArticulationCfg = config.robot.replace(prim_path="{ENV_REGEX_NS}/Robot")
 
