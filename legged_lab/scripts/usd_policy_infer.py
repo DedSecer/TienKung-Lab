@@ -66,6 +66,35 @@ import omni
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 
 from legged_lab.envs import *  # noqa:F401, F403
+from pxr import Usd
+
+
+def remove_usd_robots(stage):
+    """
+    Remove all robots from the USD stage (except those under /World/envs).
+    
+    This is useful when the USD file contains pre-existing robot models
+    that you want to remove before spawning your own robot.
+    
+    Args:
+        stage: The USD stage object
+    """
+    
+    # List of common robot prim paths to remove
+    robot_paths_to_check = [
+        "/World/walkers1",
+    ]
+    
+    removed_count = 0
+    for prim_path in robot_paths_to_check:
+        prim = stage.GetPrimAtPath(prim_path)
+        if prim and prim.IsValid():
+            stage.RemovePrim(prim_path)
+            print(f"[INFO] Removed prim at {prim_path}")
+            removed_count += 1
+    
+    if removed_count == 0:
+        print("[INFO] No pre-existing robots found in USD scene")
 
 
 def main():
@@ -114,6 +143,21 @@ def main():
 
     # set device
     env_cfg.device = device
+
+    # IMPORTANT: Remove robots from USD BEFORE creating environment
+    # This prevents PhysX from creating tensor views for prims that will be deleted
+    stage = Usd.Stage.Open(usd_path)
+    remove_usd_robots(stage)
+    # Save the modified USD to a temporary file
+    import tempfile
+    temp_usd = tempfile.NamedTemporaryFile(suffix=".usd", delete=False)
+    temp_usd_path = temp_usd.name
+    temp_usd.close()
+    stage.Export(temp_usd_path)
+    print(f"[INFO] Saved cleaned USD to temporary file: {temp_usd_path}")
+    
+    # Update config to use the cleaned USD
+    env_cfg.scene.usd_path = temp_usd_path
 
     # create environment
     env_class = task_registry.get_task_class(env_class_name)
