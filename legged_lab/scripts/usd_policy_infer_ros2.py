@@ -38,10 +38,14 @@ Usage:
     # Run with custom camera topic names
     python legged_lab/scripts/usd_policy_infer_ros2.py --task walk --policy_path /path/to/policy.pt --rgb_topic /camera/rgb --depth_topic /camera/depth
 
+    # Run with RTX LiDAR enabled
+    python legged_lab/scripts/usd_policy_infer_ros2.py --task walk --policy_path /path/to/policy.pt --enable_lidar --lidar_topic /point_cloud
+
 ROS2 Topics Published:
     - /rgb (sensor_msgs/Image): RGB camera image
     - /depth (sensor_msgs/Image): Depth camera image
     - /camera_info (sensor_msgs/CameraInfo): Camera intrinsic parameters
+    - /point_cloud (sensor_msgs/PointCloud2): RTX LiDAR point cloud data (when --enable_lidar is set)
 
 """
 
@@ -68,6 +72,10 @@ parser.add_argument("--camera_frame_id", type=str, default="robot_camera", help=
 parser.add_argument("--camera_width", type=int, default=640, help="Camera image width.")
 parser.add_argument("--camera_height", type=int, default=480, help="Camera image height.")
 parser.add_argument("--ros2_domain_id", type=int, default=0, help="ROS2 domain ID.")
+# RTX LiDAR configuration
+parser.add_argument("--enable_lidar", action="store_true", help="Enable RTX LiDAR sensor.")
+parser.add_argument("--lidar_topic", type=str, default="/point_cloud", help="ROS2 topic name for LiDAR point cloud.")
+parser.add_argument("--lidar_frame_id", type=str, default="lidar_frame", help="Frame ID for LiDAR messages.")
 
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
@@ -242,6 +250,261 @@ def create_camera_on_robot(stage, robot_prim_path: str, camera_name: str = "head
     
     print(f"[INFO] Created camera at: {camera_path}")
     return camera_path
+
+
+def create_rtx_lidar_on_robot(stage, robot_prim_path: str, lidar_name: str = "mid360_lidar",
+                              local_position: tuple = (0.0, 0.0, 0.4),
+                              local_rotation: tuple = (0.0, 0.0, 0.0)):
+    """
+    Create an RTX LiDAR sensor attached to the robot with custom attributes.
+    
+    Args:
+        stage: USD stage
+        robot_prim_path: Path to the robot prim
+        lidar_name: Name for the lidar sensor
+        local_position: Local position offset from parent (x, y, z) in meters
+        local_rotation: Local rotation offset from parent (roll, pitch, yaw) in degrees
+    
+    Returns:
+        str: Path to the created lidar prim
+    """
+    # Find the robot's base/pelvis link to attach lidar
+    robot_prim = stage.GetPrimAtPath(robot_prim_path)
+    if not robot_prim.IsValid():
+        print(f"[WARN] Robot prim not found at {robot_prim_path}")
+        return None
+    
+    # Find a suitable parent body (pelvis or base_link)
+    possible_parents = ["pelvis", "base_link", "base", "torso", "chassis"]
+    parent_path = None
+    
+    for parent_name in possible_parents:
+        test_path = f"{robot_prim_path}/{parent_name}"
+        if stage.GetPrimAtPath(test_path).IsValid():
+            parent_path = test_path
+            break
+    
+    if parent_path is None:
+        # If no specific body found, attach directly to robot root
+        parent_path = robot_prim_path
+        print(f"[INFO] No standard body found, attaching lidar to robot root: {parent_path}")
+    else:
+        print(f"[INFO] Attaching lidar to: {parent_path}")
+    
+    lidar_path = f"{parent_path}/{lidar_name}"
+    
+    # Custom sensor attributes for Mid-360 like LiDAR
+    sensor_attributes = {
+        'omni:sensor:Core:scanType': "ROTARY",
+        'omni:sensor:Core:intensityProcessing': "NORMALIZATION",
+        'omni:sensor:Core:rotationDirection': "CW",
+        'omni:sensor:Core:rayType': "IDEALIZED",
+        'omni:sensor:Core:nearRangeM': 0.1,
+        'omni:sensor:Core:farRangeM': 40.0,
+        'omni:sensor:Core:rangeResolutionM': 0.004,
+        'omni:sensor:Core:rangeAccuracyM': 0.025,
+        'omni:sensor:Core:avgPowerW': 0.002,
+        'omni:sensor:Core:minReflectance': 0.1,
+        'omni:sensor:Core:minReflectanceRange': 70.0,
+        'omni:sensor:Core:wavelengthNm': 905.0,
+        'omni:sensor:Core:pulseTimeNs': 6,
+        'omni:sensor:Core:azimuthErrorMean': 0.1,
+        'omni:sensor:Core:azimuthErrorStd': 0.5,
+        'omni:sensor:Core:elevationErrorMean': 0.1,
+        'omni:sensor:Core:elevationErrorStd': 0.5,
+        'omni:sensor:Core:maxReturns': 2,
+        'omni:sensor:Core:scanRateBaseHz': 20.0,
+        'omni:sensor:Core:reportRateBaseHz': 7761,
+        'omni:sensor:Core:numberOfEmitters': 40,
+        'omni:sensor:Core:numberOfChannels': 40,
+        'omni:sensor:Core:rangeOffset': 0.03,
+        'omni:sensor:Core:intensityMappingType': "LINEAR",
+        'omni:sensor:Core:emitterState:s001:azimuthDeg': [0] * 40,
+        'omni:sensor:Core:emitterState:s001:elevationDeg': [
+            -7.0, -5.525, -4.050, -2.575, -1.1004, 0.374, 1.849, 3.324, 4.799, 6.274,
+            7.7494, 9.2249, 10.699, 12.174, 13.645, 15.1243, 16.5999, 18.074, 19.5499, 21.024,
+            22.493, 23.9749, 25.44, 26.924, 28.39, 29.8743, 31.3499, 32.824, 34.29, 35.774,
+            37.2486, 38.724, 40.19, 41.674, 43.14, 44.624, 46.09, 47.574, 49.048, 50.524
+        ],
+        'omni:sensor:Core:emitterState:s001:fireTimeNs': [i * 1000 for i in range(40)],
+        'omni:sensor:Core:emitterState:s001:distanceCorrectionM': [0.0] * 40,
+        'omni:sensor:Core:emitterState:s001:focalDistM': [0.0] * 40,
+        'omni:sensor:Core:emitterState:s001:focalSlope': [0.0] * 40,
+        'omni:sensor:Core:emitterState:s001:horOffsetM': [0.0] * 40,
+        'omni:sensor:Core:emitterState:s001:reportRateDiv': [0.0] * 40,
+        'omni:sensor:Core:emitterState:s001:vertOffsetM': [0.0] * 40,
+        'omni:sensor:Core:emitterState:s001:channelId': list(range(1, 41)),
+    }
+    
+    # Calculate orientation from local rotation (Euler angles to quaternion)
+    import math
+    roll = math.radians(local_rotation[0])
+    pitch = math.radians(local_rotation[1])
+    yaw = math.radians(local_rotation[2])
+    
+    # Euler to quaternion conversion (ZYX order)
+    cy = math.cos(yaw * 0.5)
+    sy = math.sin(yaw * 0.5)
+    cp = math.cos(pitch * 0.5)
+    sp = math.sin(pitch * 0.5)
+    cr = math.cos(roll * 0.5)
+    sr = math.sin(roll * 0.5)
+    
+    qw = cr * cp * cy + sr * sp * sy
+    qx = sr * cp * cy - cr * sp * sy
+    qy = cr * sp * cy + sr * cp * sy
+    qz = cr * cp * sy - sr * sp * cy
+    
+    try:
+        # Execute the command to create the RTX LiDAR
+        success, sensor = omni.kit.commands.execute(
+            "IsaacSensorCreateRtxLidar",
+            path=lidar_name,
+            parent=parent_path,
+            config="Example_Rotary",  # Valid default rotating LiDAR config for Isaac Sim 4.5
+            translation=Gf.Vec3d(local_position[0], local_position[1], local_position[2]),
+            orientation=Gf.Quatd(qw, qx, qy, qz),
+        )
+        
+        if success:
+            print(f"[INFO] Created RTX LiDAR at: {lidar_path}")
+            
+            # Apply custom sensor attributes
+            lidar_prim = stage.GetPrimAtPath(lidar_path)
+            if lidar_prim.IsValid():
+                for attr_name, attr_value in sensor_attributes.items():
+                    # Skip array attributes that might not be supported directly
+                    if isinstance(attr_value, list):
+                        continue
+                    try:
+                        attr = lidar_prim.GetAttribute(attr_name)
+                        if attr.IsValid():
+                            attr.Set(attr_value)
+                    except Exception as e:
+                        print(f"[DEBUG] Could not set attribute {attr_name}: {e}")
+            
+            return lidar_path
+        else:
+            print(f"[ERROR] Failed to create RTX LiDAR")
+            return None
+            
+    except Exception as e:
+        print(f"[ERROR] Failed to create RTX LiDAR: {e}")
+        return None
+
+
+def setup_ros2_lidar_graph(lidar_prim_path: str, point_cloud_topic: str, 
+                           frame_id: str, domain_id: int = 0):
+    """
+    Setup OmniGraph for publishing RTX LiDAR data to ROS2 topics.
+    
+    Args:
+        lidar_prim_path: Path to the lidar prim
+        point_cloud_topic: ROS2 topic name for point cloud
+        frame_id: Frame ID for the lidar
+        domain_id: ROS2 domain ID
+    
+    Returns:
+        og.Graph: The created OmniGraph
+    """
+    
+    graph_path = "/World/ROS2_Lidar_Graph"
+    
+    keys = og.Controller.Keys
+    
+    # Delete existing graph if it exists
+    try:
+        existing_graph = og.get_graph_by_path(graph_path)
+        if existing_graph is not None and existing_graph.is_valid():
+            print(f"[DEBUG] Deleting existing lidar graph at {graph_path}")
+            og.Controller.delete_graph(graph_path)
+    except Exception as e:
+        print(f"[DEBUG] No existing lidar graph to delete: {e}")
+    
+    # Try different node type naming conventions (new vs legacy)
+    node_type_variants = [
+        {
+            "prefix": "isaacsim",
+            "context": "isaacsim.ros2.bridge.ROS2Context",
+            "lidar_helper": "isaacsim.ros2.bridge.ROS2RtxLidarHelper",
+            "create_render_product": "isaacsim.core.nodes.IsaacCreateRenderProduct",
+        },
+        {
+            "prefix": "omni.isaac",
+            "context": "omni.isaac.ros2_bridge.ROS2Context",
+            "lidar_helper": "omni.isaac.ros2_bridge.ROS2RtxLidarHelper",
+            "create_render_product": "omni.isaac.core_nodes.IsaacCreateRenderProduct",
+        },
+    ]
+    
+    last_error = None
+    
+    for variant in node_type_variants:
+        # Clean up any partially created graph before each attempt
+        try:
+            og.Controller.delete_graph(graph_path)
+        except:
+            pass
+        
+        try:
+            print(f"[DEBUG] Trying lidar node types: {variant['context']}")
+            
+            # Create the action graph
+            (graph, nodes, _, _) = og.Controller.edit(
+                {"graph_path": graph_path, "evaluator_name": "execution"},
+                {
+                    keys.CREATE_NODES: [
+                        ("OnPlaybackTick", "omni.graph.action.OnPlaybackTick"),
+                        ("ROS2Context", variant["context"]),
+                        ("CreateRenderProduct", variant["create_render_product"]),
+                        ("ROS2LidarHelper", variant["lidar_helper"]),
+                    ],
+                    keys.SET_VALUES: [
+                        # ROS2 Context settings
+                        ("ROS2Context.inputs:domain_id", domain_id),
+                        ("ROS2Context.inputs:useDomainIDEnvVar", False),
+                        
+                        # Render Product settings - use lidar prim as camera prim
+                        ("CreateRenderProduct.inputs:cameraPrim", lidar_prim_path),
+                        ("CreateRenderProduct.inputs:enabled", True),
+                        
+                        # Lidar Helper settings for PointCloud2
+                        ("ROS2LidarHelper.inputs:type", "point_cloud"),
+                        ("ROS2LidarHelper.inputs:topicName", point_cloud_topic),
+                        ("ROS2LidarHelper.inputs:frameId", frame_id),
+                        ("ROS2LidarHelper.inputs:fullScan", True),  # Publish after full scan
+                    ],
+                    keys.CONNECT: [
+                        # Connect tick to render product creation
+                        ("OnPlaybackTick.outputs:tick", "CreateRenderProduct.inputs:execIn"),
+                        
+                        # Connect render product to lidar helper
+                        ("CreateRenderProduct.outputs:execOut", "ROS2LidarHelper.inputs:execIn"),
+                        ("CreateRenderProduct.outputs:renderProductPath", "ROS2LidarHelper.inputs:renderProductPath"),
+                        
+                        # Connect ROS2 context
+                        ("ROS2Context.outputs:context", "ROS2LidarHelper.inputs:context"),
+                    ],
+                },
+            )
+            
+            print(f"[INFO] Created ROS2 LiDAR graph at: {graph_path}")
+            print(f"[INFO] Point cloud topic: {point_cloud_topic}")
+            
+            return graph
+            
+        except Exception as e:
+            last_error = e
+            print(f"[DEBUG] Failed with lidar node types {variant['context']}: {e}")
+            # Try to clean up the partially created graph
+            try:
+                og.Controller.delete_graph(graph_path)
+            except:
+                pass
+            continue
+    
+    # If all variants failed, raise the last error
+    raise RuntimeError(f"Failed to create ROS2 LiDAR graph with any node type variant. Last error: {last_error}")
 
 
 def setup_ros2_camera_graph(camera_prim_path: str, rgb_topic: str, depth_topic: str, 
@@ -501,7 +764,41 @@ def main():
             print(f"[ERROR] Failed to setup ROS2 camera graph: {e}")
             print("[WARN] Continuing without ROS2 camera publishing...")
     else:
-        print("[WARN] Camera creation failed, skipping ROS2 publishing setup")
+        print("[WARN] Camera creation failed, skipping ROS2 camera publishing setup")
+    
+    # Create RTX LiDAR on the robot if enabled
+    if args_cli.enable_lidar:
+        lidar_path = create_rtx_lidar_on_robot(
+            stage=current_stage,
+            robot_prim_path=robot_prim_path,
+            lidar_name="mid360_lidar",
+            local_position=(0.0, 0.0, 1.0),  # On top of robot pelvis
+            local_rotation=(0.0, 0.0, 0.0),
+        )
+        
+        # Update simulation to initialize the lidar
+        simulation_app.update()
+        
+        if lidar_path:
+            # Setup ROS2 LiDAR publishing graph
+            try:
+                ros2_lidar_graph = setup_ros2_lidar_graph(
+                    lidar_prim_path=lidar_path,
+                    point_cloud_topic=args_cli.lidar_topic,
+                    frame_id=args_cli.lidar_frame_id,
+                    domain_id=args_cli.ros2_domain_id
+                )
+                print("[INFO] ROS2 LiDAR publishing enabled successfully!")
+                print(f"[INFO] LiDAR Point Cloud topic: {args_cli.lidar_topic}")
+                print(f"[INFO] To view point cloud: ros2 topic echo {args_cli.lidar_topic}")
+                print(f"[INFO] To visualize in RViz2: Add PointCloud2 display with topic {args_cli.lidar_topic}")
+            except Exception as e:
+                print(f"[ERROR] Failed to setup ROS2 LiDAR graph: {e}")
+                print("[WARN] Continuing without ROS2 LiDAR publishing...")
+        else:
+            print("[WARN] LiDAR creation failed, skipping ROS2 LiDAR publishing setup")
+    else:
+        print("[INFO] LiDAR disabled. Use --enable_lidar to enable RTX LiDAR sensor.")
 
     # setup keyboard control if not headless
     if not args_cli.headless:
