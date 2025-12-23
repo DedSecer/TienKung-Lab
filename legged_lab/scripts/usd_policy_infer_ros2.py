@@ -45,6 +45,10 @@ Usage:
     python legged_lab/scripts/usd_policy_infer_ros2.py --task walk --policy_path /path/to/policy.pt \\
         --lidar_config Example_Solid_State
 
+    # Run with custom Mid-360 style LiDAR (40 channels, wide vertical FOV)
+    python legged_lab/scripts/usd_policy_infer_ros2.py --task walk --policy_path /path/to/policy.pt \\
+        --use_custom_lidar
+
 ROS2 Topics Published:
     - /rgb (sensor_msgs/Image): RGB camera image
     - /depth (sensor_msgs/Image): Depth camera image  
@@ -55,6 +59,7 @@ LiDAR Configuration Options:
     - Example_Rotary: 3D rotating LiDAR (e.g., Velodyne-like)
     - Example_Solid_State: Solid-state LiDAR
     - Example_Rotary_2D: 2D rotating LiDAR (e.g., SICK-like)
+    - Custom (--use_custom_lidar): Mid-360 style, 40 channels, -7° to +50.5° vertical FOV
 
 Verification Commands:
     # Check available topics
@@ -94,7 +99,10 @@ parser.add_argument("--camera_height", type=int, default=480, help="Camera image
 # ROS2 LiDAR configuration
 parser.add_argument("--lidar_topic", type=str, default="/point_cloud", help="ROS2 topic name for LiDAR point cloud.")
 parser.add_argument("--lidar_frame_id", type=str, default="robot_lidar", help="Frame ID for LiDAR messages.")
-parser.add_argument("--lidar_config", type=str, default="Example_Rotary", help="LiDAR config name (Example_Rotary, Example_Solid_State, etc.).")
+parser.add_argument("--lidar_config", type=str, default="Example_Rotary", 
+                    help="LiDAR config name: Example_Rotary, Example_Solid_State, Example_Rotary_2D, Custom")
+parser.add_argument("--use_custom_lidar", action="store_true", 
+                    help="Use custom Mid-360 style LiDAR configuration (40 channels, wide vertical FOV)")
 # Common ROS2 configuration
 parser.add_argument("--ros2_domain_id", type=int, default=0, help="ROS2 domain ID.")
 
@@ -277,9 +285,61 @@ def create_camera_on_robot(stage, robot_prim_path: str, camera_name: str = "head
     return camera_path
 
 
+def get_custom_lidar_attributes():
+    """
+    Get custom LiDAR sensor attributes similar to Livox Mid-360.
+    
+    Returns:
+        dict: Custom sensor attributes for RTX LiDAR
+    """
+    sensor_attributes = {
+        'omni:sensor:Core:scanType': "ROTARY",
+        'omni:sensor:Core:intensityProcessing': "NORMALIZATION",
+        'omni:sensor:Core:rotationDirection': "CW",
+        'omni:sensor:Core:rayType': "IDEALIZED",
+        'omni:sensor:Core:nearRangeM': 0.1,
+        'omni:sensor:Core:farRangeM': 40.0,
+        'omni:sensor:Core:rangeResolutionM': 0.004,
+        'omni:sensor:Core:rangeAccuracyM': 0.025,
+        'omni:sensor:Core:avgPowerW': 0.002,
+        'omni:sensor:Core:minReflectance': 0.1,
+        'omni:sensor:Core:minReflectanceRange': 70.0,
+        'omni:sensor:Core:wavelengthNm': 905.0,
+        'omni:sensor:Core:pulseTimeNs': 6,
+        'omni:sensor:Core:azimuthErrorMean': 0.1,
+        'omni:sensor:Core:azimuthErrorStd': 0.5,
+        'omni:sensor:Core:elevationErrorMean': 0.1,
+        'omni:sensor:Core:elevationErrorStd': 0.5,
+        'omni:sensor:Core:maxReturns': 2,
+        'omni:sensor:Core:scanRateBaseHz': 20.0,
+        'omni:sensor:Core:reportRateBaseHz': 7761,
+        'omni:sensor:Core:numberOfEmitters': 40,
+        'omni:sensor:Core:numberOfChannels': 40,
+        'omni:sensor:Core:rangeOffset': 0.03,
+        'omni:sensor:Core:intensityMappingType': "LINEAR",
+        'omni:sensor:Core:emitterState:s001:azimuthDeg': [0] * 40,
+        'omni:sensor:Core:emitterState:s001:elevationDeg': [
+            -7.0, -5.525, -4.050, -2.575, -1.1004, 0.374, 1.849, 3.324, 4.799, 6.274,
+            7.7494, 9.2249, 10.699, 12.174, 13.645, 15.1243, 16.5999, 18.074, 19.5499, 21.024,
+            22.493, 23.9749, 25.44, 26.924, 28.39, 29.8743, 31.3499, 32.824, 34.29, 35.774,
+            37.2486, 38.724, 40.19, 41.674, 43.14, 44.624, 46.09, 47.574, 49.048, 50.524
+        ],
+        'omni:sensor:Core:emitterState:s001:fireTimeNs': [i * 1000 for i in range(40)],
+        'omni:sensor:Core:emitterState:s001:distanceCorrectionM': [0.0] * 40,
+        'omni:sensor:Core:emitterState:s001:focalDistM': [0.0] * 40,
+        'omni:sensor:Core:emitterState:s001:focalSlope': [0.0] * 40,
+        'omni:sensor:Core:emitterState:s001:horOffsetM': [0.0] * 40,
+        'omni:sensor:Core:emitterState:s001:reportRateDiv': [0.0] * 40,
+        'omni:sensor:Core:emitterState:s001:vertOffsetM': [0.0] * 40,
+        'omni:sensor:Core:emitterState:s001:channelId': list(range(1, 41)),
+    }
+    return sensor_attributes
+
+
 def create_rtx_lidar_on_robot(robot_prim_path: str, lidar_name: str = "rtx_lidar",
                                local_position: tuple = (0.0, 0.0, 0.5),
-                               config: str = "Example_Rotary"):
+                               config: str = "Example_Rotary",
+                               use_custom_config: bool = False):
     """
     Create an RTX LiDAR sensor attached to the robot.
     
@@ -287,7 +347,8 @@ def create_rtx_lidar_on_robot(robot_prim_path: str, lidar_name: str = "rtx_lidar
         robot_prim_path: Path to the robot prim
         lidar_name: Name for the LiDAR sensor
         local_position: Local position offset from parent body (x, y, z) in meters
-        config: LiDAR configuration name (Example_Rotary, Example_Solid_State, Example_Rotary_2D)
+        config: LiDAR configuration name (Example_Rotary, Example_Solid_State, Example_Rotary_2D, Custom)
+        use_custom_config: If True, use custom Mid-360 style configuration
     
     Returns:
         str: Path to the created LiDAR prim, or None if failed
@@ -319,18 +380,51 @@ def create_rtx_lidar_on_robot(robot_prim_path: str, lidar_name: str = "rtx_lidar
         print(f"[INFO] Attaching LiDAR to: {parent_path}")
     
     # Create the RTX LiDAR sensor using Isaac Sim command
-    # Note: The path parameter should be just the name, and parent specifies where to attach
     try:
-        result, sensor = omni.kit.commands.execute(
-            "IsaacSensorCreateRtxLidar",
-            path=f"/{lidar_name}",  # Just the name with leading slash
-            parent=parent_path,     # The parent prim path
-            config=config,
-            translation=local_position,
-            orientation=Gf.Quatd(1.0, 0.0, 0.0, 0.0),
-        )
-        
         lidar_path = f"{parent_path}/{lidar_name}"
+        
+        if use_custom_config or config == "Custom":
+            # Use custom Mid-360 style configuration
+            print(f"[INFO] Using custom LiDAR configuration (Mid-360 style)")
+            
+            # First create the LiDAR with base config
+            result, sensor = omni.kit.commands.execute(
+                "IsaacSensorCreateRtxLidar",
+                path=f"/{lidar_name}",
+                parent=parent_path,
+                config="Example_Rotary",  # Base config
+                translation=local_position,
+                orientation=Gf.Quatd(1.0, 0.0, 0.0, 0.0),
+            )
+            
+            if result:
+                # Apply custom attributes to the created sensor
+                sensor_attributes = get_custom_lidar_attributes()
+                lidar_prim = stage.GetPrimAtPath(lidar_path)
+                
+                if lidar_prim.IsValid():
+                    for attr_name, attr_value in sensor_attributes.items():
+                        try:
+                            attr = lidar_prim.GetAttribute(attr_name)
+                            if attr and attr.IsValid():
+                                attr.Set(attr_value)
+                            else:
+                                # Try to create the attribute
+                                lidar_prim.CreateAttribute(attr_name, type(attr_value).__name__)
+                        except Exception as attr_e:
+                            # Silently skip attributes that can't be set
+                            pass
+                    print(f"[INFO] Applied custom LiDAR attributes")
+        else:
+            # Use preset configuration
+            result, sensor = omni.kit.commands.execute(
+                "IsaacSensorCreateRtxLidar",
+                path=f"/{lidar_name}",
+                parent=parent_path,
+                config=config,
+                translation=local_position,
+                orientation=Gf.Quatd(1.0, 0.0, 0.0, 0.0),
+            )
         
         if result:
             print(f"[INFO] Created RTX LiDAR at: {lidar_path} with config: {config}")
@@ -643,7 +737,8 @@ def main():
         robot_prim_path=robot_prim_path,
         lidar_name="rtx_lidar",
         local_position=(0.0, 0.0, 0.8),  # On top of the robot (higher for better visibility)
-        config=args_cli.lidar_config
+        config=args_cli.lidar_config,
+        use_custom_config=args_cli.use_custom_lidar
     )
     
     # Update simulation to initialize the LiDAR
