@@ -41,11 +41,20 @@ Usage:
     # Run with RTX LiDAR enabled
     python legged_lab/scripts/usd_policy_infer_ros2.py --task walk --policy_path /path/to/policy.pt --enable_lidar --lidar_topic /point_cloud
 
+    # Run with cmd_vel subscriber enabled for velocity control
+    python legged_lab/scripts/usd_policy_infer_ros2.py --task walk --policy_path /path/to/policy.pt --enable_cmd_vel --cmd_vel_topic /cmd_vel
+
 ROS2 Topics Published:
     - /rgb (sensor_msgs/Image): RGB camera image
     - /depth (sensor_msgs/Image): Depth camera image
     - /camera_info (sensor_msgs/CameraInfo): Camera intrinsic parameters
     - /point_cloud (sensor_msgs/PointCloud2): RTX LiDAR point cloud data (when --enable_lidar is set)
+
+ROS2 Topics Subscribed:
+    - /cmd_vel (geometry_msgs/Twist): Velocity commands for robot control (when --enable_cmd_vel is set)
+        - linear.x: Forward/backward velocity (m/s)
+        - linear.y: Left/right velocity (m/s)
+        - angular.z: Rotation velocity (rad/s)
 
 """
 
@@ -76,6 +85,12 @@ parser.add_argument("--ros2_domain_id", type=int, default=0, help="ROS2 domain I
 parser.add_argument("--enable_lidar", action="store_true", help="Enable RTX LiDAR sensor.")
 parser.add_argument("--lidar_topic", type=str, default="/point_cloud", help="ROS2 topic name for LiDAR point cloud.")
 parser.add_argument("--lidar_frame_id", type=str, default="lidar_frame", help="Frame ID for LiDAR messages.")
+# ROS2 cmd_vel subscriber configuration
+parser.add_argument("--enable_cmd_vel", action="store_true", help="Enable ROS2 cmd_vel subscriber for velocity control.")
+parser.add_argument("--cmd_vel_topic", type=str, default="/cmd_vel", help="ROS2 topic name for velocity commands (geometry_msgs/Twist).")
+parser.add_argument("--max_lin_vel_x", type=float, default=1.0, help="Maximum linear velocity in x direction (m/s).")
+parser.add_argument("--max_lin_vel_y", type=float, default=0.5, help="Maximum linear velocity in y direction (m/s).")
+parser.add_argument("--max_ang_vel_z", type=float, default=1.0, help="Maximum angular velocity around z axis (rad/s).")
 
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
@@ -103,7 +118,127 @@ from pxr import Usd, UsdGeom, Gf
 
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 
+# ROS2 imports for cmd_vel subscriber
+try:
+    import rclpy
+    from rclpy.node import Node
+    from geometry_msgs.msg import Twist
+    from rclpy.executors import SingleThreadedExecutor
+    import threading
+    ROS2_AVAILABLE = True
+except ImportError:
+    print("[WARN] rclpy not available. cmd_vel subscriber will be disabled.")
+    ROS2_AVAILABLE = False
+
 from legged_lab.envs import *  # noqa:F401, F403
+
+
+class CmdVelSubscriber:
+    """
+    ROS2 subscriber for cmd_vel topic (geometry_msgs/Twist).
+    
+    This class subscribes to velocity commands from ROS2 and stores them
+    for use in controlling the robot's movement.
+    
+    The subscriber runs in a separate thread to avoid blocking the simulation.
+    """
+    
+    def __init__(self, topic_name: str = "/cmd_vel", 
+                 max_lin_vel_x: float = 1.0,
+                 max_lin_vel_y: float = 0.5,
+                 max_ang_vel_z: float = 1.0,
+                 domain_id: int = 0):
+        """
+        Initialize the cmd_vel subscriber.
+        
+        Args:
+            topic_name: ROS2 topic name for velocity commands
+            max_lin_vel_x: Maximum linear velocity in x direction (m/s)
+            max_lin_vel_y: Maximum linear velocity in y direction (m/s)
+            max_ang_vel_z: Maximum angular velocity around z axis (rad/s)
+            domain_id: ROS2 domain ID
+        """
+        if not ROS2_AVAILABLE:
+            raise RuntimeError("rclpy is not available. Cannot create CmdVelSubscriber.")
+        
+        self.topic_name = topic_name
+        self.max_lin_vel_x = max_lin_vel_x
+        self.max_lin_vel_y = max_lin_vel_y
+        self.max_ang_vel_z = max_ang_vel_z
+        
+        # Initialize velocity commands to zero
+        self._lin_vel_x = 0.0
+        self._lin_vel_y = 0.0
+        self._ang_vel_z = 0.0
+        self._lock = threading.Lock()
+        
+        # Set ROS_DOMAIN_ID if not already set
+        import os
+        os.environ.setdefault('ROS_DOMAIN_ID', str(domain_id))
+        
+        # Initialize rclpy if not already initialized
+        if not rclpy.ok():
+            rclpy.init()
+        
+        # Create ROS2 node and subscriber
+        self._node = rclpy.create_node('isaacsim_cmd_vel_subscriber')
+        self._subscription = self._node.create_subscription(
+            Twist,
+            topic_name,
+            self._cmd_vel_callback,
+            10  # QoS profile depth
+        )
+        
+        # Create executor and run in separate thread
+        self._executor = SingleThreadedExecutor()
+        self._executor.add_node(self._node)
+        self._running = True
+        self._thread = threading.Thread(target=self._spin_thread, daemon=True)
+        self._thread.start()
+        
+        print(f"[INFO] CmdVelSubscriber initialized on topic: {topic_name}")
+        print(f"[INFO] Velocity limits: lin_vel_x={max_lin_vel_x}, lin_vel_y={max_lin_vel_y}, ang_vel_z={max_ang_vel_z}")
+    
+    def _cmd_vel_callback(self, msg: Twist):
+        """Callback function for cmd_vel messages."""
+        with self._lock:
+            # Clamp velocities to maximum values
+            self._lin_vel_x = max(-self.max_lin_vel_x, min(self.max_lin_vel_x, msg.linear.x))
+            self._lin_vel_y = max(-self.max_lin_vel_y, min(self.max_lin_vel_y, msg.linear.y))
+            self._ang_vel_z = max(-self.max_ang_vel_z, min(self.max_ang_vel_z, msg.angular.z))
+    
+    def _spin_thread(self):
+        """Thread function to spin the ROS2 node."""
+        while self._running and rclpy.ok():
+            self._executor.spin_once(timeout_sec=0.01)
+    
+    def get_velocity_command(self) -> tuple:
+        """
+        Get the current velocity command.
+        
+        Returns:
+            Tuple of (lin_vel_x, lin_vel_y, ang_vel_z)
+        """
+        with self._lock:
+            return (self._lin_vel_x, self._lin_vel_y, self._ang_vel_z)
+    
+    def shutdown(self):
+        """Shutdown the subscriber and cleanup resources."""
+        self._running = False
+        if self._thread.is_alive():
+            self._thread.join(timeout=1.0)
+        
+        if self._node:
+            self._node.destroy_node()
+        
+        print("[INFO] CmdVelSubscriber shutdown complete")
+    
+    def __del__(self):
+        """Destructor to ensure cleanup."""
+        try:
+            self.shutdown()
+        except:
+            pass
 
 # Enable required extensions for ROS2 camera publishing
 def enable_required_extensions():
@@ -736,8 +871,8 @@ def main():
         stage=current_stage,
         robot_prim_path=robot_prim_path,
         camera_name="head_camera",
-        local_position=(0.3, 0.0, 0.35),  # Front of robot, slightly elevated
-        local_rotation=(-10.0, 0.0, 0.0),  # Tilted slightly downward
+        local_position=(0.3, 0.0, 0.65),  # 前方 0.3m, 抬高 0.4m
+        local_rotation=(90.0, -90.0, 0.0),  # 绕 Y 轴旋转 90度，相机朝前
         width=args_cli.camera_width,
         height=args_cli.camera_height
     )
@@ -772,7 +907,7 @@ def main():
             stage=current_stage,
             robot_prim_path=robot_prim_path,
             lidar_name="mid360_lidar",
-            local_position=(0.0, 0.0, 1.0),  # On top of robot pelvis
+            local_position=(0.0, 0.0, 0.8),  # 机器人 pelvis 上方 0.6m
             local_rotation=(0.0, 0.0, 0.0),
         )
         
@@ -800,6 +935,31 @@ def main():
     else:
         print("[INFO] LiDAR disabled. Use --enable_lidar to enable RTX LiDAR sensor.")
 
+    # Setup ROS2 cmd_vel subscriber if enabled
+    cmd_vel_subscriber = None
+    if args_cli.enable_cmd_vel:
+        if ROS2_AVAILABLE:
+            try:
+                cmd_vel_subscriber = CmdVelSubscriber(
+                    topic_name=args_cli.cmd_vel_topic,
+                    max_lin_vel_x=args_cli.max_lin_vel_x,
+                    max_lin_vel_y=args_cli.max_lin_vel_y,
+                    max_ang_vel_z=args_cli.max_ang_vel_z,
+                    domain_id=args_cli.ros2_domain_id
+                )
+                print("[INFO] ROS2 cmd_vel subscriber enabled successfully!")
+                print(f"[INFO] Subscribing to topic: {args_cli.cmd_vel_topic}")
+                print(f"[INFO] To send velocity commands: ros2 topic pub {args_cli.cmd_vel_topic} geometry_msgs/msg/Twist '{{linear: {{x: 0.5, y: 0.0, z: 0.0}}, angular: {{x: 0.0, y: 0.0, z: 0.2}}}}'")
+                print(f"[INFO] Or use teleop_twist_keyboard: ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args -r /cmd_vel:={args_cli.cmd_vel_topic}")
+            except Exception as e:
+                print(f"[ERROR] Failed to setup cmd_vel subscriber: {e}")
+                print("[WARN] Continuing without cmd_vel control...")
+                cmd_vel_subscriber = None
+        else:
+            print("[WARN] rclpy not available. cmd_vel subscriber disabled.")
+    else:
+        print("[INFO] cmd_vel subscriber disabled. Use --enable_cmd_vel to enable velocity control via ROS2.")
+
     # setup keyboard control if not headless
     if not args_cli.headless:
         from legged_lab.utils.keyboard import Keyboard
@@ -811,10 +971,27 @@ def main():
     print("[INFO] Starting policy inference...")
     print("[INFO] Press Ctrl+C to stop the simulation.")
 
-    with torch.inference_mode():
-        while simulation_app.is_running():
-            action = policy(obs)
-            obs, _, _, _ = env.step(action)
+    try:
+        with torch.inference_mode():
+            while simulation_app.is_running():
+                # Update velocity commands from cmd_vel subscriber
+                if cmd_vel_subscriber is not None:
+                    lin_vel_x, lin_vel_y, ang_vel_z = cmd_vel_subscriber.get_velocity_command()
+                    
+                    # Update the command generator's command tensor
+                    # command tensor shape: (num_envs, 3) where [lin_vel_x, lin_vel_y, ang_vel_z]
+                    env.command_generator.command[:, 0] = lin_vel_x
+                    env.command_generator.command[:, 1] = lin_vel_y
+                    env.command_generator.command[:, 2] = ang_vel_z
+                
+                action = policy(obs)
+                obs, _, _, _ = env.step(action)
+    except KeyboardInterrupt:
+        print("\n[INFO] Simulation interrupted by user.")
+    finally:
+        # Cleanup cmd_vel subscriber
+        if cmd_vel_subscriber is not None:
+            cmd_vel_subscriber.shutdown()
 
 
 if __name__ == "__main__":
