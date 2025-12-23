@@ -18,11 +18,12 @@
 
 """
 This script demonstrates policy inference in a prebuilt USD environment for TienKung robot
-with camera sensors and ROS2 topic publishing.
+with camera sensors, RTX LiDAR, and ROS2 topic publishing.
 
 In this example, we use a locomotion policy to control the TienKung robot. The robot was trained
 using the walk task. The robot is commanded to move forward at a constant velocity.
-Additionally, camera sensors are added to the robot and their data is published to ROS2 topics.
+Additionally, camera sensors and 3D RTX LiDAR are added to the robot and their data is 
+published to ROS2 topics.
 
 Prerequisites:
     - ROS 2 must be installed and sourced before launching Isaac Sim
@@ -35,13 +36,36 @@ Usage:
     # Run with custom USD environment
     python legged_lab/scripts/usd_policy_infer_ros2.py --task walk --policy_path /path/to/exported/policy.pt --usd_path /path/to/custom.usd
 
-    # Run with custom camera topic names
-    python legged_lab/scripts/usd_policy_infer_ros2.py --task walk --policy_path /path/to/policy.pt --rgb_topic /camera/rgb --depth_topic /camera/depth
+    # Run with custom camera and LiDAR topic names
+    python legged_lab/scripts/usd_policy_infer_ros2.py --task walk --policy_path /path/to/policy.pt \\
+        --rgb_topic /camera/rgb --depth_topic /camera/depth \\
+        --lidar_topic /point_cloud --lidar_config Example_Rotary
+
+    # Run with solid-state LiDAR configuration
+    python legged_lab/scripts/usd_policy_infer_ros2.py --task walk --policy_path /path/to/policy.pt \\
+        --lidar_config Example_Solid_State
 
 ROS2 Topics Published:
     - /rgb (sensor_msgs/Image): RGB camera image
-    - /depth (sensor_msgs/Image): Depth camera image
+    - /depth (sensor_msgs/Image): Depth camera image  
     - /camera_info (sensor_msgs/CameraInfo): Camera intrinsic parameters
+    - /point_cloud (sensor_msgs/PointCloud2): 3D RTX LiDAR point cloud
+
+LiDAR Configuration Options:
+    - Example_Rotary: 3D rotating LiDAR (e.g., Velodyne-like)
+    - Example_Solid_State: Solid-state LiDAR
+    - Example_Rotary_2D: 2D rotating LiDAR (e.g., SICK-like)
+
+Verification Commands:
+    # Check available topics
+    ros2 topic list
+    
+    # View camera images
+    ros2 run rqt_image_view rqt_image_view /rgb
+    
+    # Visualize point cloud in RViz2
+    rviz2
+    # Then add PointCloud2 display and set topic to /point_cloud
 
 """
 
@@ -54,7 +78,7 @@ from isaaclab.app import AppLauncher
 from legged_lab.utils import task_registry
 
 # add argparse arguments
-parser = argparse.ArgumentParser(description="Policy inference for TienKung robot in a USD environment with ROS2 camera publishing.")
+parser = argparse.ArgumentParser(description="Policy inference for TienKung robot in a USD environment with ROS2 camera and LiDAR publishing.")
 parser.add_argument("--task", type=str, default="walk", help="Name of the task.")
 parser.add_argument("--policy_path", type=str, help="Path to model checkpoint exported as jit.", required=True)
 parser.add_argument("--usd_path", type=str, default=None, help="Path to custom USD environment file.")
@@ -67,6 +91,11 @@ parser.add_argument("--camera_info_topic", type=str, default="/camera_info", hel
 parser.add_argument("--camera_frame_id", type=str, default="robot_camera", help="Frame ID for camera messages.")
 parser.add_argument("--camera_width", type=int, default=640, help="Camera image width.")
 parser.add_argument("--camera_height", type=int, default=480, help="Camera image height.")
+# ROS2 LiDAR configuration
+parser.add_argument("--lidar_topic", type=str, default="/point_cloud", help="ROS2 topic name for LiDAR point cloud.")
+parser.add_argument("--lidar_frame_id", type=str, default="robot_lidar", help="Frame ID for LiDAR messages.")
+parser.add_argument("--lidar_config", type=str, default="Example_Rotary", help="LiDAR config name (Example_Rotary, Example_Solid_State, etc.).")
+# Common ROS2 configuration
 parser.add_argument("--ros2_domain_id", type=int, default=0, help="ROS2 domain ID.")
 
 # append AppLauncher cli args
@@ -97,19 +126,23 @@ from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 
 from legged_lab.envs import *  # noqa:F401, F403
 
-# Enable required extensions for ROS2 camera publishing
+# Enable required extensions for ROS2 camera and LiDAR publishing
 def enable_required_extensions():
-    """Enable all required extensions for ROS2 camera publishing."""
+    """Enable all required extensions for ROS2 camera and LiDAR publishing."""
     import omni.kit.app
     
     extension_manager = omni.kit.app.get_app().get_extension_manager()
     
-    # All required extensions for ROS2 camera publishing
+    # All required extensions for ROS2 camera and LiDAR publishing
     required_extensions = [
         # ROS2 bridge extensions (try new name first, then legacy)
         ("isaacsim.ros2.bridge", "omni.isaac.ros2_bridge"),
         # Core nodes extensions (try new name first, then legacy)
         ("isaacsim.core.nodes", "omni.isaac.core_nodes"),
+        # RTX Lidar sensor extensions
+        ("isaacsim.sensors.rtx", "omni.isaac.sensor"),
+        # Replicator for ROS2 writers
+        ("omni.replicator.core",),
     ]
     
     enabled_extensions = []
@@ -242,6 +275,108 @@ def create_camera_on_robot(stage, robot_prim_path: str, camera_name: str = "head
     
     print(f"[INFO] Created camera at: {camera_path}")
     return camera_path
+
+
+def create_rtx_lidar_on_robot(robot_prim_path: str, lidar_name: str = "rtx_lidar",
+                               local_position: tuple = (0.0, 0.0, 0.5),
+                               config: str = "Example_Rotary"):
+    """
+    Create an RTX LiDAR sensor attached to the robot.
+    
+    Args:
+        robot_prim_path: Path to the robot prim
+        lidar_name: Name for the LiDAR sensor
+        local_position: Local position offset from parent body (x, y, z) in meters
+        config: LiDAR configuration name (Example_Rotary, Example_Solid_State, Example_Rotary_2D)
+    
+    Returns:
+        str: Path to the created LiDAR prim, or None if failed
+    """
+    import omni.kit.commands
+    
+    stage = omni.usd.get_context().get_stage()
+    
+    # Find robot's base link to attach LiDAR
+    robot_prim = stage.GetPrimAtPath(robot_prim_path)
+    if not robot_prim.IsValid():
+        print(f"[WARN] Robot prim not found at {robot_prim_path}")
+        return None
+    
+    # Find a suitable parent body
+    possible_parents = ["pelvis", "base_link", "base", "torso", "chassis"]
+    parent_path = None
+    
+    for parent_name in possible_parents:
+        test_path = f"{robot_prim_path}/{parent_name}"
+        if stage.GetPrimAtPath(test_path).IsValid():
+            parent_path = test_path
+            break
+    
+    if parent_path is None:
+        parent_path = robot_prim_path
+        print(f"[INFO] No standard body found, attaching LiDAR to robot root: {parent_path}")
+    else:
+        print(f"[INFO] Attaching LiDAR to: {parent_path}")
+    
+    # Create the RTX LiDAR sensor using Isaac Sim command
+    # Note: The path parameter should be just the name, and parent specifies where to attach
+    try:
+        result, sensor = omni.kit.commands.execute(
+            "IsaacSensorCreateRtxLidar",
+            path=f"/{lidar_name}",  # Just the name with leading slash
+            parent=parent_path,     # The parent prim path
+            config=config,
+            translation=local_position,
+            orientation=Gf.Quatd(1.0, 0.0, 0.0, 0.0),
+        )
+        
+        lidar_path = f"{parent_path}/{lidar_name}"
+        
+        if result:
+            print(f"[INFO] Created RTX LiDAR at: {lidar_path} with config: {config}")
+            print(f"[INFO] LiDAR position offset: {local_position}")
+            return lidar_path
+        else:
+            print(f"[ERROR] Failed to create RTX LiDAR")
+            return None
+            
+    except Exception as e:
+        print(f"[ERROR] Failed to create RTX LiDAR: {e}")
+        return None
+
+
+def setup_ros2_lidar_publisher(lidar_prim_path: str, topic_name: str, frame_id: str):
+    """
+    Setup RTX LiDAR point cloud publisher using omni.replicator writers.
+    
+    Args:
+        lidar_prim_path: Path to the RTX LiDAR prim
+        topic_name: ROS2 topic name for point cloud
+        frame_id: Frame ID for the point cloud message
+    
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        import omni.replicator.core as rep
+        
+        # Create render product for the LiDAR
+        hydra_texture = rep.create.render_product(lidar_prim_path, [1, 1], name="LidarRenderProduct")
+        
+        # Create the ROS2 point cloud publisher writer
+        writer = rep.writers.get("RtxLidar" + "ROS2PublishPointCloud")
+        writer.initialize(topicName=topic_name, frameId=frame_id)
+        writer.attach([hydra_texture])
+        
+        print(f"[INFO] Created ROS2 LiDAR point cloud publisher")
+        print(f"[INFO] LiDAR topic: {topic_name}")
+        print(f"[INFO] LiDAR frame ID: {frame_id}")
+        
+        return True
+        
+    except Exception as e:
+        print(f"[ERROR] Failed to setup ROS2 LiDAR publisher: {e}")
+        return False
 
 
 def setup_ros2_camera_graph(camera_prim_path: str, rgb_topic: str, depth_topic: str, 
@@ -502,6 +637,35 @@ def main():
             print("[WARN] Continuing without ROS2 camera publishing...")
     else:
         print("[WARN] Camera creation failed, skipping ROS2 publishing setup")
+
+    # Create RTX LiDAR on the robot
+    lidar_path = create_rtx_lidar_on_robot(
+        robot_prim_path=robot_prim_path,
+        lidar_name="rtx_lidar",
+        local_position=(0.0, 0.0, 0.8),  # On top of the robot (higher for better visibility)
+        config=args_cli.lidar_config
+    )
+    
+    # Update simulation to initialize the LiDAR
+    simulation_app.update()
+    
+    if lidar_path:
+        # Setup ROS2 LiDAR point cloud publisher
+        try:
+            lidar_success = setup_ros2_lidar_publisher(
+                lidar_prim_path=lidar_path,
+                topic_name=args_cli.lidar_topic,
+                frame_id=args_cli.lidar_frame_id
+            )
+            if lidar_success:
+                print("[INFO] ROS2 LiDAR publishing enabled successfully!")
+                print(f"[INFO] LiDAR topic: {args_cli.lidar_topic}")
+                print(f"[INFO] To view point cloud in RViz2: rviz2")
+        except Exception as e:
+            print(f"[ERROR] Failed to setup ROS2 LiDAR publisher: {e}")
+            print("[WARN] Continuing without ROS2 LiDAR publishing...")
+    else:
+        print("[WARN] LiDAR creation failed, skipping ROS2 LiDAR publishing setup")
 
     # setup keyboard control if not headless
     if not args_cli.headless:
