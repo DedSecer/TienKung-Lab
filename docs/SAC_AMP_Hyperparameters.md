@@ -80,9 +80,9 @@ auto_alpha: bool = True
 | `amp_loss_coef` | 0.1 | 0.1 | AMP 损失系数 λ_AMP。控制对抗损失在 Actor 损失中的权重。 |
 | `amp_grad_penalty_coef` | 0.01 | 0.01 | 梯度惩罚系数 λ_GP。用于稳定判别器训练，防止过拟合。 |
 | `amp_batch_size` | 8192 | 8192 | AMP 判别器每次更新采样的 transition 数量。 |
-| `amp_reward_coef` | 0.3 | 0.3 | 判别器奖励系数。控制 AMP 奖励在总奖励中的缩放。 |
-| `amp_task_reward_lerp` | 0.7 | 0.7 | 任务奖励权重。总奖励 = lerp * r_task + (1-lerp) * r_amp。 |
-| `amp_num_preload_transitions` | 2×10^7 | 200000 | 预加载的专家 transition 数量。 |
+| `amp_reward_coef` | **2.0** | 2.0 | AMP 奖励系数。控制判别器奖励的缩放。**注意：比 PPO 的值（0.3）大很多！** |
+| `amp_task_reward_lerp` | **0.4** | 0.4 | 任务奖励权重 w_task。总奖励 = w_task * r_task + w_amp * r_amp，其中 w_amp = 1 - w_task = 0.6。**注意：SAC 使用较小的任务权重！** |
+| `amp_num_preload_transitions` | 2×10^7 | 2×10^7 | 预加载的专家 transition 数量。 |
 | `amp_discr_hidden_dims` | [1024, 512] | [1024, 512] | 判别器网络隐藏层维度。 |
 | `amp_replay_buffer_size` | 100000 | 100000 | AMP 专用 Replay Buffer 大小，存储策略生成的 (s, s') 对。 |
 

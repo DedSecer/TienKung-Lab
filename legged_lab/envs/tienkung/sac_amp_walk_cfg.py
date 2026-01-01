@@ -381,10 +381,10 @@ class TienKungSACWalkAgentCfg(RslRlOnPolicyRunnerCfg):
     load_run = ".*"
     load_checkpoint = "model_.*.pt"
 
-    # AMP parameters
-    amp_reward_coef = 0.3  # Discriminator reward coefficient
+    # AMP parameters (from paper Table II)
+    amp_reward_coef = 2.0  # AMP reward coefficient (paper: 2.0)
     amp_motion_files = ["legged_lab/envs/tienkung/datasets/motion_amp_expert/walk.txt"]
-    amp_num_preload_transitions = 200000  # Preload transitions (paper: 2*10^7)
-    amp_task_reward_lerp = 0.7  # Task reward weight (paper: w_task=0.4, w_AMP=0.6)
+    amp_num_preload_transitions = 20_000_000  # Preload transitions (paper: 2*10^7)
+    amp_task_reward_lerp = 0.4  # Task reward weight w_task=0.4, w_AMP=0.6 (paper Section III)
     amp_discr_hidden_dims = [1024, 512]  # Discriminator hidden dims (paper)
-    min_normalized_std = [0.01] * 20  # Minimum normalized std (paper: [0.01, 0.01, 0.01])
+    min_normalized_std = [0.01, 0.01, 0.01] + [0.01] * 17  # Minimum normalized std (paper: [0.01, 0.01, 0.01])
