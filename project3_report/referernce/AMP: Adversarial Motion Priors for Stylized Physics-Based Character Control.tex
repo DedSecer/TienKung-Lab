@@ -1,0 +1,238 @@
+\documentclass[acmtog]{acmart}
+
+% Packages for algorithms and graphics
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{amsmath}
+\usepackage{graphicx}
+
+% Meta-data
+\title{AMP: Adversarial Motion Priors for Stylized Physics-Based Character Control}
+
+\author{Xue Bin Peng}
+\affiliation{%
+  \institution{University of California, Berkeley}
+  \country{USA}
+}
+
+\author{Ze Ma}
+\affiliation{%
+  \institution{Shanghai Jiao Tong University}
+  \country{China}
+}
+
+\author{Pieter Abbeel}
+\affiliation{%
+  \institution{University of California, Berkeley}
+  \country{USA}
+}
+
+\author{Sergey Levine}
+\affiliation{%
+  \institution{University of California, Berkeley}
+  \country{USA}
+}
+
+\author{Angjoo Kanazawa}
+\affiliation{%
+  \institution{University of California, Berkeley}
+  \country{USA}
+}
+
+\begin{document}
+
+\begin{abstract}
+Synthesizing graceful and life-like behaviors for physically simulated characters has been a fundamental challenge in computer animation. Data-driven methods that leverage motion tracking are a prominent class of techniques for producing high fidelity motions for a wide range of behaviors. However, the effectiveness of these tracking-based methods often hinges on carefully designed objective functions, and when applied to large and diverse motion datasets, these methods require significant additional machinery to select the appropriate motion for the character to track in a given scenario. 
+
+In this work, we propose to obviate the need to manually design imitation objectives and mechanisms for motion selection by utilizing a fully automated approach based on adversarial imitation learning. High-level task objectives that the character should perform can be specified by relatively simple reward functions, while the low-level style of the character's behaviors can be specified by a dataset of unstructured motion clips, without any explicit clip selection or sequencing. These motion clips are used to train an adversarial motion prior, which specifies style-rewards for training the character through reinforcement learning (RL). The adversarial RL procedure automatically selects which motion to perform, dynamically interpolating and generalizing from the dataset. Our system produces high-quality motions that are comparable to those achieved by state-of-the-art tracking-based techniques, while also being able to easily accommodate large datasets of unstructured motion clips. Composition of disparate skills emerges automatically from the motion prior, without requiring a high-level motion planner or other task-specific annotations of the motion clips. We demonstrate the effectiveness of our framework on a diverse cast of complex simulated characters and a challenging suite of motor control tasks.
+\end{abstract}
+
+\maketitle
+
+\section{Introduction}
+Synthesizing natural and life-like motions for virtual characters is a crucial element for breathing life into immersive experiences, such as films and games. The demand for realistic motions becomes even more apparent for VR applications, where users are provided with rich modalities through which to interact with virtual agents. Developing control strategies that are able to replicate the properties of naturalistic behaviors is also of interest for robotic systems, as natural motions implicitly encode important properties, such as safety and energy efficiency, which are vital for effective operation of robots in the real world.
+
+To control the style of a character's motions, we propose adversarial motion priors (AMP), a method for imitating behaviors from raw motion clips without requiring any task-specific annotations or organization of the dataset. Given a set of reference motions that constitutes a desired motion style, the motion prior is modeled as an adversarial discriminator, trained to differentiate between behaviors depicted in the dataset from those produced by the character. The motion prior therefore acts as a general measure of similarity between the motions produced by a character and the motions in the dataset.
+
+\section{Overview}
+Given a dataset of reference motions and a task objective defined by a reward function, our system synthesizes a control policy that enables a character to achieve the task objective in a physically simulated environment, while utilizing behaviors that resemble the motions in the dataset.
+
+The motion of the simulated character is controlled by a policy $\pi(a_t|s_t,g)$ that maps the state of the character $s_t$ and a given goal $g$ to a distribution over actions $a_t$. The goal $g$ specifies a task reward function $r_t^G = r^G(s_t, a_t, s_{t+1}, g)$, which defines high-level objectives. The style objective $r_t^S = r^S(s_t, s_{t+1})$ is specified by an adversarial discriminator, acting as a task-agnostic motion prior.
+
+\section{Background}
+
+\subsection{Goal-Conditioned Reinforcement Learning}
+Our characters are trained through a goal-conditioned reinforcement learning framework. The agent's objective is to learn a policy that maximizes its expected discounted return $J(\pi)$:
+\begin{equation}
+    J(\pi) = \mathbb{E}_{g \sim p(g)} \left[ \mathbb{E}_{\tau \sim p(\tau|\pi, g)} \left[ \sum_{t=0}^{T-1} \gamma^t r_t \right] \right]
+\end{equation}
+where $p(\tau|\pi, g) = p(s_0) \prod_{t=0}^{T-1} p(s_{t+1}|s_t, a_t) \pi(a_t|s_t, g)$ represents the likelihood of a trajectory $\tau$.
+
+\subsection{Generative Adversarial Imitation Learning}
+GAIL trains a discriminator $D(s, a)$ to differentiate between dataset samples and policy samples:
+\begin{equation}
+    \min_{D} -\mathbb{E}_{d^{\mathcal{M}}(s,a)} [\log(D(s,a))] - \mathbb{E}_{d^{\pi}(s,a)} [\log(1 - D(s,a))]
+\end{equation}
+The policy is trained using RL with rewards $r_t = -\log(1 - D(s_t, a_t))$.
+
+\section{Adversarial Motion Prior}
+We consider reward functions consisting of two components:
+\begin{equation}
+    r(s_t, a_t, s_{t+1}, g) = w^G r^G(s_t, a_t, s_{t+1}, g) + w^S r^S(s_t, s_{t+1})
+\end{equation}
+where $r^G$ is the task-specific reward and $r^S$ is the task-agnostic style reward.
+
+\subsection{Imitation from Observations}
+Since we use motion clips (state-only), the discriminator is trained on state transitions $D(s, s')$:
+\begin{equation}
+    \min_{D} -\mathbb{E}_{d^{\mathcal{M}}(s,s')} [\log(D(s,s'))] - \mathbb{E}_{d^{\pi}(s,s')} [\log(1 - D(s,s'))]
+\end{equation}
+
+\subsection{Least-Squares Discriminator}
+We adopt the Least-Squares GAN (LSGAN) objective for stability:
+\begin{equation}
+    \min_{D} \mathbb{E}_{d^{\mathcal{M}}(s,s')} [(D(s,s') - 1)^2] + \mathbb{E}_{d^{\pi}(s,s')} [(D(s,s') + 1)^2]
+\end{equation}
+The reward function for the policy is then:
+\begin{equation}
+    r^S(s_t, s_{t+1}) = \max [0, 1 - 0.25(D(s_t, s_{t+1}) - 1)^2]
+\end{equation}
+
+\subsection{Gradient Penalty}
+To mitigate instability, we apply a gradient penalty:
+\begin{equation}
+\begin{split}
+    \min_{D} \quad & \mathbb{E}_{d^{\mathcal{M}}(s,s')} [(D(\Phi(s),\Phi(s')) - 1)^2] \\
+    + & \mathbb{E}_{d^{\pi}(s,s')} [(D(\Phi(s),\Phi(s')) + 1)^2] \\
+    + & \frac{w^{GP}}{2} \mathbb{E}_{d^{\mathcal{M}}(s,s')} [||\nabla_{\phi} D(\phi)|_{\phi=(\Phi(s),\Phi(s'))}||^2]
+\end{split}
+\end{equation}
+where $\Phi(s)$ is the observation map extracting features relevant to motion style.
+
+\section{Model Representation}
+
+\subsection{Action Space}
+For spherical joints, targets are specified as 3D exponential maps $q \in \mathbb{R}^3$. The axis $v$ and angle $\theta$ are:
+\begin{equation}
+    \theta = ||q||_2, \quad v = \frac{q}{||q||_2}
+\end{equation}
+
+\subsection{Training Algorithm}
+
+\begin{algorithm}
+\caption{Training with AMP}
+\begin{algorithmic}[1]
+\State Input $\mathcal{M}$: dataset of reference motions
+\State Initialize discriminator $D$, policy $\pi$, value function $V$
+\State Initialize replay buffer $\mathcal{B} \leftarrow \emptyset$
+\While{not done}
+    \For{trajectory $i = 1, \dots, m$}
+        \State Collect trajectory $\tau^i \leftarrow \{(s_t, a_t, r_t^G)\}_{t=0}^{T-1}$ with $\pi$
+        \For{time step $t = 0, \dots, T-1$}
+            \State $d_t \leftarrow D(\Phi(s_t), \Phi(s_{t+1}))$
+            \State Calculate $r_t^S$ using Eq. 7 and $d_t$
+            \State $r_t \leftarrow w^G r_t^G + w^S r_t^S$
+        \EndFor
+        \State Store $\tau^i$ in $\mathcal{B}$
+    \EndFor
+    \For{update step $j = 1, \dots, n$}
+        \State Sample batch from $\mathcal{M}$ ($b^{\mathcal{M}}$) and $\mathcal{B}$ ($b^{\pi}$)
+        \State Update $D$ using Eq. 8
+    \EndFor
+    \State Update $V$ and $\pi$ using data from trajectories $\{\tau^i\}$
+\EndWhile
+\end{algorithmic}
+\end{algorithm}
+
+\section{Tasks}
+We evaluate AMP on various characters (Humanoid, T-Rex, Dog) and tasks:
+\begin{itemize}
+    \item \textbf{Target Heading:} Move along direction $d^*$ at speed $v^*$.
+    \item \textbf{Target Location:} Move to location $x^*$.
+    \item \textbf{Dribbling:} Manipulate a soccer ball to a target.
+    \item \textbf{Strike:} Move to and strike a target.
+    \item \textbf{Obstacles:} Traverse complex terrain (gaps, steps).
+\end{itemize}
+
+\section{Results}
+Our experiments show that AMP can scale to large unstructured datasets. Table 1 summarizes the performance.
+
+\begin{table}[h]
+\caption{Performance statistics (Normalized Task Return)}
+\label{tab:performance}
+\begin{tabular}{lllc}
+\toprule
+Character & Task & Dataset & Return \\
+\midrule
+Humanoid & Target Heading & Locomotion & $0.90 \pm 0.01$ \\
+         &                & Walk & $0.46 \pm 0.01$ \\
+         &                & Run & $0.63 \pm 0.01$ \\
+         &                & Stealthy & $0.89 \pm 0.02$ \\
+         &                & Zombie & $0.94 \pm 0.00$ \\
+Humanoid & Target Location& Locomotion & $0.63 \pm 0.01$ \\
+         &                & Zombie & $0.50 \pm 0.00$ \\
+Humanoid & Obstacles      & Run+Leap+Roll & $0.27 \pm 0.10$ \\
+Humanoid & Dribble        & Locomotion & $0.78 \pm 0.05$ \\
+Humanoid & Strike         & Walk+Punch & $0.73 \pm 0.02$ \\
+T-Rex    & Target Location& Locomotion & $0.36 \pm 0.03$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Single-Clip Imitation}
+We compare AMP to tracking-based methods using average pose error:
+\begin{equation}
+    e_{pose} = \frac{1}{N_{joint}} \sum_{j \in joints} ||(x_j^t - x_{root}^t) - (\hat{x}_j^t - \hat{x}_{root}^t)||^2
+\end{equation}
+Results indicate AMP produces comparable quality to state-of-the-art tracking methods without phase synchronization.
+
+\section{Discussion and Limitations}
+We presented an adversarial learning system for physics-based character animation. The system decouples task specification from style specification. Limitations include susceptibility to mode collapse (common in GANs) and the current focus on temporal rather than spatial composition of skills.
+
+\begin{appendix}
+\section{Task Rewards}
+\textbf{Target Heading:}
+\begin{equation}
+    r_t^G = \exp(-0.25 ||v^* - \dot{x}_{com}^t||^2)
+\end{equation}
+
+\textbf{Target Location:}
+\begin{equation}
+    r_t^G = 0.7 \exp(-0.5 ||x^* - x_{root}^t||^2) + 0.3 \exp(-\max(0, v^* - d_t^* \cdot \dot{x}_{com}^t)^2)
+\end{equation}
+
+\textbf{Strike:}
+\begin{equation}
+    r_t^G = 
+    \begin{cases} 
+      1 & \text{target hit} \\
+      0.3 r_{near}^t + 0.3 & ||x^* - x_{root}^t|| < 1.375m \\
+      0.3 r_{far}^t & \text{otherwise}
+   \end{cases}
+\end{equation}
+
+\section{Hyperparameters}
+\begin{table}[h]
+\caption{AMP Hyperparameters}
+\label{tab:hyperparams}
+\begin{tabular}{ll}
+\toprule
+Parameter & Value \\
+\midrule
+$w^G$ Task-Reward Weight & 0.5 \\
+$w^S$ Style-Reward Weight & 0.5 \\
+$w^{GP}$ Gradient Penalty & 10 \\
+Samples Per Update & 4096 \\
+Batch Size & 256 \\
+$\gamma$ Discount (Tasks) & 0.99 \\
+Optimizer & Adam \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\end{appendix}
+
+\bibliographystyle{ACM-Reference-Format}
+\bibliography{references} 
+
+\end{document}

@@ -1,0 +1,227 @@
+%\documentclass[draftclsnofoot,12pt, onecolumn]{IEEEtran}
+\documentclass[conference]{IEEEtran}
+\usepackage{cite}
+\usepackage{listings}
+\usepackage{lipsum}
+\usepackage{xcolor}
+\usepackage{pifont}
+\newcommand{\cmark}{\ding{51}}
+\newcommand{\xmark}{\ding{55}}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{amsmath, amssymb}
+\allowdisplaybreaks
+\usepackage{pifont}
+\usepackage{booktabs}
+\usepackage[utf8]{inputenc}
+\usepackage{algorithm}
+\captionsetup{font=footnotesize}
+\usepackage{algpseudocode} 
+\usepackage{amsfonts}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{bbm}
+\usepackage{amsthm}
+\usepackage{bm}
+\usepackage{multirow}
+\title{Instructions and Template for Assignment 3}
+\author{\IEEEauthorblockN{Manyou Ma}
+\IEEEauthorblockA{School of Artificial Intelligence, Shenzhen Technology University, Shenzhen, China}
+email: mamanyou@sztu.edu.cn
+}
+
+\begin{document}
+
+\maketitle
+
+\section*{Assignment 3: Performance Comparison}
+
+Assignment~3 builds upon the work completed in Assignment~1, where you proposed an initial project plan and implemented a preliminary version of the simulator.
+In this assignment, you are expected to further refine and complete your simulator, apply multiple deep reinforcement learning (DRL) algorithms, and conduct a comprehensive simulation-based evaluation.
+
+Specifically, you must finalize your simulator implementation and ensure that it supports end-to-end training and evaluation.
+Based on this simulator, you are required to solve the environment using \emph{at least three} DRL algorithms.
+Each DRL algorithm must be implemented in from scratch, including network architectures, loss functions, optimization procedures, and training loops. You are required to implement all DRL algorithms \emph{from scratch}.
+The use of high-level DRL training libraries, such as Stable-Baselines3, is \emph{not allowed}.
+In addition, you must include the non-DRL baseline derived in Assignment~1 as a reference method for performance comparison.
+
+You are required to report the experimental results through a structured simulation study.
+You must clearly describe the experimental setup, including the selected baseline algorithms and all relevant simulation and training parameters.
+The simulation results must include comparisons of episode reward, episode length, and training loss during the training process, with at least three corresponding plots.
+
+All implementation code must be provided in a public GitHub repository.
+You must continue working with the provided \LaTeX{} template and update the report accordingly.
+In particular, you are required to include the complete simulator code in the appendix and provide a separate attachment listing all hyperparameters used for each DRL algorithm.
+
+
+\section{Motivation}
+
+
+\lipsum[2-4]    
+
+\section{Related Work}
+
+
+Reinforcement Learning~\cite{sutton2017reinforcement} and DQN~\cite{mnih2015human}
+\lipsum[2-5]    
+
+
+\section{System Model and Problem Formulation}\label{sec:Chapter2}
+
+\lipsum[2-8] 
+
+\section{Simulation Study}
+
+This section presents the simulation-based evaluation of the proposed environment and learning algorithms.
+We first describe the experimental setup, including the baseline methods and simulation parameters.
+We then report and compare the performance of different algorithms through multiple training metrics.
+
+\subsection{Experimental Setup}
+
+\subsubsection{Baseline Algorithms}
+
+In addition to the DRL-based approaches, we include the non-DRL baseline algorithm developed in Part~1 of the project.
+This baseline follows a handcrafted decision rule derived from domain knowledge and does not rely on learning.
+The baseline serves as a reference point to evaluate the effectiveness of reinforcement learning in the proposed environment.
+
+Students must clearly describe the baseline policy and its decision logic here.
+
+\subsubsection{DRL Algorithms}
+
+We evaluate at least three DRL algorithms on the same simulator.
+Each algorithm is implemented from scratch and trained under identical environment settings to ensure a fair comparison.
+You should list and properly cite the selected algorithms and briefly describe their key characteristics.
+
+\subsubsection{Simulation Parameters}
+
+All algorithms are trained and evaluated using the same simulation parameters.
+Table~\ref{tab:sim_params} summarizes the key parameters used in the experiments.
+
+\begin{table}[h]
+\centering
+\caption{Simulation Parameters}
+\label{tab:sim_params}
+\begin{tabular}{ll}
+\hline
+\textbf{Parameter} & \textbf{Value} \\
+\hline
+Maximum episode length & \\
+Discount factor ($\gamma$) & \\
+Learning rate & \\
+Batch size & \\
+Training episodes / steps & \\
+Random seed(s) & \\
+\hline
+\end{tabular}
+\end{table}
+
+\subsection{Simulation Results}
+
+We evaluate the training performance of all algorithms using three key metrics:
+episode reward, episode length, and training loss.
+All results are averaged over training iterations, and smoothing is applied where appropriate for visualization.
+
+\subsubsection{Episode Reward}
+
+Figure~\ref{fig:reward} shows the evolution of the episode reward during training for different algorithms.
+Higher episode reward indicates better long-term performance in the proposed environment.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.8\linewidth]{figs/episode_reward.pdf}
+\caption{Episode reward versus training iterations.}
+\label{fig:reward}
+\end{figure}
+
+\subsubsection{Episode Length}
+
+Figure~\ref{fig:length} compares the episode length observed during training.
+This metric reflects the agent's ability to reach terminal conditions efficiently.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.8\linewidth]{figs/episode_length.pdf}
+\caption{Episode length versus training iterations.}
+\label{fig:length}
+\end{figure}
+
+\subsubsection{Training Loss}
+
+Figure~\ref{fig:loss} illustrates the training loss for the learning-based methods.
+The specific definition of the loss depends on the algorithm (e.g., TD loss for value-based methods or critic loss for actor--critic methods).
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.8\linewidth]{figs/training_loss.pdf}
+\caption{Training loss versus training iterations.}
+\label{fig:loss}
+\end{figure}
+
+
+\appendix
+\section{Simulator Code}
+\lstset{
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  frame=single,
+}
+\subsection{Environment Implementation}
+In this appendix, students must include the \emph{complete implementation} of the simulator used in their experiments.
+The code provided here must contain all \emph{core environment functions}, including at minimum the constructor
+(\texttt{\_\_init\_\_}), \texttt{reset}, \texttt{step}, and observation generation.
+The simulator code included in this appendix must be identical to the version used for training and evaluation,
+and must be consistent with the implementation in the accompanying GitHub repository.
+\begin{lstlisting}[language=Python]
+import numpy as np
+
+
+class ResourceEnv:
+    def __init__(self, max_q=20, horizon=200, seed=0):
+        self.max_q = max_q
+        self.horizon = horizon
+        self.rng = np.random.default_rng(seed)
+        self.state_dim = 3
+        self.action_dim = 2
+        self.reset()
+
+    def reset(self):
+        self.q = self.rng.integers(0, self.max_q // 2)
+        self.h = self.rng.uniform(0.2, 1.0)
+        self.t = self.horizon
+        return self._obs()
+
+    def step(self, a):
+        r = 0.0
+        if self.rng.random() < 0.25:
+            self.q += 1
+        if a == 1 and self.q > 0:
+            if self.rng.random() < self.h:
+                self.q -= 1
+                r += 1.0
+            else:
+                r -= 0.2
+        else:
+            r -= 0.05
+        if self.q > self.max_q:
+            r -= 1.0
+            self.q = self.max_q
+        self.h = self.rng.uniform(0.2, 1.0)
+        self.t -= 1
+        done = self.t <= 0
+        return self._obs(), r, done, {}
+
+    def _obs(self):
+        return np.array(
+            [self.q / self.max_q, self.h, self.t / self.horizon],
+            dtype=np.float32,
+        )
+
+
+\end{lstlisting}
+
+
+
+\bibliographystyle{IEEEtran}
+\bibliography{IEEEabrv,reference}
+
+\end{document}

@@ -1,0 +1,351 @@
+\documentclass[letterpaper, 10pt, conference]{IEEEtran}
+
+% Required packages
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{algorithmic}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{xcolor}
+\usepackage{booktabs} % For professional looking tables
+\usepackage{hyperref}
+
+% Correct bad hyphenation here
+\hyphenation{op-tical net-works semi-conduc-tor}
+
+\begin{document}
+
+% Title
+\title{Unlocking the Potential of Soft Actor-Critic for Imitation Learning}
+
+% Authors
+\author{\IEEEauthorblockN{Nayari Marie Lessa\IEEEauthorrefmark{1}\IEEEauthorrefmark{2}*, Melya Boukheddimi\IEEEauthorrefmark{1} and Frank Kirchner\IEEEauthorrefmark{1}\IEEEauthorrefmark{2}}
+\IEEEauthorblockA{\IEEEauthorrefmark{1}Robotics Innovation Center, DFKI GmbH, 28359 Bremen, Germany.}
+\IEEEauthorblockA{\IEEEauthorrefmark{2}University of Bremen, Robotics Research Group, 28359 Bremen, Germany.}
+\IEEEauthorblockA{*Corresponding author: lessa@uni-bremen.de}}
+
+\maketitle
+
+\begin{abstract}
+Learning-based methods have enabled robots to acquire bio-inspired movements with increasing levels of naturalness and adaptability. Among these, Imitation Learning (IL) has proven effective in transferring complex motion patterns from animals to robotic systems. However, current state-of-the-art frameworks predominantly rely on Proximal Policy Optimization (PPO), an on-policy algorithm that prioritizes stability over sample efficiency and policy generalization. This paper proposes a novel IL framework that combines Adversarial Motion Priors (AMP) with the off-policy Soft Actor-Critic (SAC) algorithm to overcome these limitations. This integration leverages replay-driven learning and entropy-regularized exploration, enabling naturalistic behavior and task execution, improving data efficiency and robustness. We evaluate the proposed approach (AMP+SAC) on quadruped gaits involving multiple reference motions and diverse terrains. Experimental results demonstrate that the proposed framework not only maintains stable task execution but also achieves higher imitation rewards compared to the widely used AMP+PPO method. These findings highlight the potential of an off-policy IL formulation for advancing motion generation in robotics.
+\end{abstract}
+
+\IEEEpeerreviewmaketitle
+
+\section{Introduction}
+
+The past decade has witnessed remarkable progress in learning-based algorithms for robotics, with applications spanning a wide range of domains. These advances aim to endow robots with greater intelligence and adaptability, enabling them to perform tasks with smooth, natural, and human or animal-like motions \cite{Tong2024, Qin2025, Akgun2024}. Among the many research directions, bio-inspired robotics has emerged as particularly impactful, influencing both mechanical design and motion generation \cite{Zhang2024}. Within this context, IL plays a pivotal role in generating bio-inspired behaviors, enabling robots to reproduce complex motion patterns during task execution \cite{Budiarto2024}.
+
+IL has been successfully applied across diverse areas of robotics. For example, in medical applications, robotic arms replicate the precise motions of expert physicians \cite{Jian2025}. While in animal-inspired locomotion, quadruped robots have learned gaits from natural counterparts \cite{Zhang2025}. A variety of IL approaches have been explored. For instance, natural motion generation is proposed by \cite{Li2024} an approach that learns a CPG-based controller for humanoid gait generation. Similarly, model-based strategies have been developed. \cite{Reske2021} integrated Model Predictive Control (MPC) with Multi-Layer Perceptron (MLP) experts to generate diverse quadruped gaits, while \cite{Youm2023} combined MPC with deep reinforcement learning (RL) to improve locomotion. Although effective, these methods mainly rely on optimal trajectory tracking and often neglect the dynamic variability inherent in animal-inspired motion.
+
+To address these limitations, recent research has combined IL with RL, often leveraging real animal motion datasets as references. For example, \cite{Chen2025} proposed "in-between," an IL approach that generated dynamically consistent gaits with precise velocity tracking on quadruped robots. Similarly, \cite{Zhang2024_2} introduced an RL-based IL framework trained on dog motion data, where a trajectory encoder-decoder was coupled with PPO \cite{Schulman2017}, enabling the reproduction of highly dynamic behaviors on real hardware. Among RL algorithms, PPO has become the dominant on-policy method in IL, primarily due to its stability and efficiency \cite{Luo2024}.
+
+While stable, PPO is limited in sample efficiency and policy generalization. A wide range of PPO-based IL frameworks have been proposed to transfer animal-inspired behaviors to quadruped robots. Early work demonstrated the feasibility of this paradigm, such as \cite{Peng2020}, which trained dog-inspired policies and successfully deployed them on physical systems. Building on this, \cite{Li2022} introduced CASSI, an unsupervised adversarial imitation framework coupled with PPO that enabled quadrupeds to acquire a diverse repertoire of behaviors. To further enhance robustness, \cite{Li2023} augmented PPO with a reference motion encoder, improving locomotion on challenging terrains. \cite{Han2024} proposed a hierarchical RL framework in which animal motions were represented as discrete latent embeddings, enabling successful deployment of highly dynamic behaviors on quadruped robots. More recently, \cite{Xiao2025} leveraged domain randomization during PPO training to obtain robust policies capable of adapting to diverse motions and terrains.
+
+Despite this remarkable progress, most efforts remain focused on performance optimization and sim-to-real transfer, with comparatively less attention given to exploring alternative algorithmic formulations and design choices within IL frameworks. In this work, we aim to address this gap. Specifically, we propose a framework that replaces the commonly used on-policy PPO with the off-policy SAC algorithm \cite{Haarnoja2018}, while combining it with AMP \cite{Peng2021, Escontrela2022} to provide structured imitation guidance. Unlike PPO, SAC benefits from its off-policy nature, allowing more efficient exploration and broader policy generalization. These properties are particularly important for robots that must operate in unconstrained environments, adapting to diverse motions and terrains while maintaining smooth, natural behaviors. As a use case, we evaluate quadruped locomotion across multiple motions and terrains, including a performance benchmarking against a baseline AMP+PPO implementation.
+
+\textbf{Contributions:} The main contributions of this paper are:
+\begin{itemize}
+    \item A novel IL framework that integrates AMP with the off-policy SAC algorithm, enabling robust task execution while preserving natural, animal-inspired motion.
+    \item Extensive evaluations on quadruped locomotion tasks involving multi-motions and varying terrains, demonstrating the framework's ability to generalize beyond reference trajectories.
+    \item Performance comparison against a widely used AMP+PPO baseline, showing that our approach achieves superior imitation rewards.
+\end{itemize}
+
+\textbf{Organization:} The remainder of this paper is organized as follows. Section II introduces the proposed methodology. Section III describes the experimentation setup. Section IV presents the results and comparisons with the baseline. Finally, Section V summarizes the findings and limitations and outlines future research directions.
+
+\section{Methodology}
+
+In this work, we aim to train a robot to imitate animal behaviors using a combination of reinforcement learning and adversarial imitation. The overview of the proposed methodology is illustrated in Fig. \ref{fig:pipeline}. The pipeline is categorized in two sequential stages: (1) motion capture processing for extracting reference kinematic features, and (2) adversarial imitation learning. The latter stage is itself composed of two components: training a discriminator to differentiate expert from agent motions, and optimizing a policy via SAC.
+
+\begin{figure}[ht]
+    \centering
+    % \includegraphics[width=\linewidth]{pipeline.png} 
+    \caption{Pipeline of the AMP+SAC imitation learning. (Placeholder for Fig. 2)}
+    \label{fig:pipeline}
+\end{figure}
+
+\subsection{Reference Data Processing}
+In order to perform our training, a data processing step is necessary; for that reason, the raw dataset is pre-processed using affine transformations to account for scale differences and foot offsets. To ensure kinematic feasibility, we converted the 3D joint positions into joint angles via inverse kinematics and computed joint velocities as well as base linear and angular velocities. This procedure yields a sequence of joint angle vectors $q_{t}^{t=1\dots T}$, where $T$ is the number of frames in the motion clip. The final reference motion dataset $\mathcal{D}$ consists of root position and orientation, joint angles, joint velocities, and foot positions, all expressed in the local frame of the robot.
+
+\subsection{Discriminator-Guided Imitation with Soft Actor Critic}
+We formulate the locomotion imitation learning problem as a Markov Decision Process (MDP) defined by a tuple $\mathcal{M}=(\mathcal{S}, \mathcal{A}, P, r, \gamma)$, where $\mathcal{S}$ is the state space, $\mathcal{A}$ is the action space, $P(s'|s,a)$ denotes the transition dynamics, $r(s,a,s')$ is the reward function, and $\gamma \in [0,1]$ is the discount factor.
+
+The goal of Reinforcement Learning is to find a policy $\pi_{\theta}(a|s)$ parameterized by $\theta$ that maximizes the expected cumulative discounted reward $J(\pi) = \mathbb{E}_{\pi}[\sum_{t=0}^{T}\gamma^{t}r(s_{t},a_{t})]$ over a finite horizon $T$. To solve the locomotion control problem, we adopt the SAC algorithm \cite{Haarnoja2018}, an off-policy actor-critic method that augments the reward maximization objective with an entropy regularization term. This encourages exploration and improves robustness of the learned policy. The SAC objective is defined as:
+\begin{equation}
+J(\pi)=\sum_{t=0}^{T}\mathbb{E}_{(s_{t},a_{t})\sim\pi}[r(s_{t},a_{t})+\alpha\mathcal{H}(\pi(\cdot|s_{t}))]
+\end{equation}
+where $\mathcal{H}(\pi(\cdot|s))$ denotes the entropy of the policy $\pi_{\theta}$, and $\alpha$ is the temperature coefficient that controls the trade-off between maximizing the expected return and encouraging exploration.
+
+In our framework, the actor $\pi_{\theta}(a|s)$ is parameterized by a multi-layer perceptron (MLP). The network receives normalized states at time $t$ and outputs the mean and log-standard deviation of a Gaussian distribution. An action is then sampled from this distribution and passed through a tanh squashing function to ensure outputs lie within valid bounds, a process implemented using the re-parameterization trick to enable end-to-end gradient back-propagation. The actor outputs continuous joint commands for the robot. The critic consists of two independently initialized Q-networks, $Q_{\psi_{1}}(s,a)$ and $Q_{\psi_{2}}(s,a)$, each implemented as an MLP. These are trained to estimate the expected soft Q-value, which includes the expected return plus an entropy bonus, for state-action pairs.
+
+A discriminator network $\mathcal{D}_{\phi}$ is trained to distinguish between state transitions $(s,s')$ generated by the policy and those from the expert dataset $\mathcal{D}$. We employ Adversarial Motion Priors (AMP) \cite{Peng2021} to train the discriminator objective:
+\begin{multline}
+\arg \min_{\phi}\mathbb{E}_{(s,s')\sim\mathcal{D}}[(D_{\phi}(s,s')-1)^{2}] \\
++\mathbb{E}_{(s,s')\sim\pi_{\theta}(s,a)}[(D_{\phi}(s,s')+1)^{2}] \\
++\frac{w^{gp}}{2}\mathbb{E}_{(s,s')\sim\mathcal{D}}[||\nabla_{\phi}D_{\phi}(s,s')||^{2}]
+\end{multline}
+where the first two terms form a least-squares adversarial loss objective to differ the state transitions, and the last term is the gradient penalty regularization controlled by the weight $w^{gp}$ to prevent over-fitting to the reference dataset, improving stability during adversarial training.
+
+\subsubsection{Actor objective with AMP shaping}
+In SAC, the actor objective $\mathcal{J}_{\pi}(\theta)$ optimizes the policy $\pi_{\theta}$ to maximize expected future return while simultaneously enforcing entropy maximization. Formally, the actor is trained by minimizing the Kullback-Leibler divergence between the entropy-augmented reward, weighted by temperature $\alpha$, and the state-action value estimate $Q_{\psi}(s,a)$:
+\begin{equation}
+\mathcal{J}_{\pi}(\theta)=\mathbb{E}_{s\sim\mathcal{D}}[\mathbb{E}_{a\sim\pi_{\theta}(\cdot|s)}[\alpha \log \pi_{\theta}(a|s)-Q_{\psi}(s,a)]]
+\end{equation}
+To integrate AMP with SAC the actor loss function is augmented with adversarial objectives:
+\begin{equation}
+\mathcal{J}_{\pi}^{AMP}(\theta)=\mathcal{J}_{\pi}(\theta)+\lambda_{AMP}\cdot\mathcal{L}_{AMP}+\lambda_{grad}\cdot\mathcal{L}_{grad}
+\end{equation}
+where $\mathcal{L}_{AMP}$ is the adversarial loss from the AMP discriminator, encouraging policy-generated state transitions to resemble expert demonstrations, and $\mathcal{L}_{grad}$ is the gradient penalty loss that ensures training stability for the discriminator. The coefficients $\lambda_{AMP}$ and $\lambda_{grad}$ control the weighting of these additional terms. This formulation enables the policy to acquire complex skills through imitation while preserving the robustness and exploration guarantees of maximum entropy RL.
+
+\subsection{Task and Imitation Reward Formulation}
+The adversarial framework minimizes reward engineering by replacing explicit trajectory tracking with a learned reward signal. A discriminator $D_{\phi}$ provides this signal, guiding the policy to imitate the expert by rewarding it for generating states that $D_{\phi}$ classifies as real. This AMP reward is defined as:
+\begin{equation}
+r^{AMP}(s_t, s_{t+1}) = w_{AMP} \max [0, 1-0.25(D_{\phi}(s_t, s_{t+1}) - 1)^2]
+\end{equation}
+where $w_{AMP}$ is a scalar coefficient that balances the importance of imitation against the task reward. The transformation $(D_{\phi}(\cdot)-1)^{2}$ and the max operation serve to bound the reward within the range [0,1] for stable learning.
+
+Our goal is to evaluate the locomotion imitation while promoting task-oriented and physically feasible behaviors on the robot. Therefore, the adversarial reward is combined with a separate locomotion reward $r_{task}(s,a,s')$ composed by a forward command velocity $\vec{v}_{t}=[\vec{v}_{t}^{x}]$ specified in the base frame, and additional terms that penalize undesired motions such as excessive lateral drift, high base angular velocity around the x,y,z-axis, and position limit violations. The total reward $r_{t}$ at each time-step is therefore a weighted sum of these two components:
+\begin{equation}
+r(s_{t},a_{t})=w_{task} r_{task}(s,a,s') + w_{AMP}r_{AMP}(s_{t},s'_{t})
+\end{equation}
+
+\section{Experimental Implementation}
+
+In this section, we present the experimental setup employed to evaluate the proposed imitation learning framework. We detail the training configuration and evaluation protocol used to benchmark SAC and PPO within AMP framework.
+
+\subsection{Reference Dataset}
+The motion capture dataset used in this work \cite{Zhang2018} contains clips of a German Shepherd dog performing various motion behaviors. For this work, we selected walking and trotting gaits, each clipped to one gait cycle. The resulting data have a total duration of 1.95 seconds (95 frames), with 1.134 seconds (55 frames) for walking and 0.82 seconds (40 frames) for trotting. The raw data consist of 3D joint positions and orientations, which were pre-processed using the methodology detailed in Sec. II-B.
+
+\subsection{Multi-Gait Imitation Learning}
+We evaluate the performance of our method against the established benchmark of PPO within the AMP framework. Both algorithms were trained under identical conditions, with 5 random seeds each, using the same reward function parameterization and domain randomization settings. Our SAC-based implementation uses separate Actor and Critic networks, each comprising two hidden layers with 1024 and 512 units, and GELU activation functions. The AMP discriminator network also consists of two hidden layers but uses ReLU activation. We choose AdamW to optimize $\alpha$ and the actor. The Actor is optimized with the policy parameters coupled with discriminator's encoder and readout layer, for alignment. The discriminator is optimized within a supervised learning objective defined in Eq. 2.
+
+Training is performed using a replay buffer with a capacity of $10^{6}$ experience tuples. For each training iteration, a batch of 16,384 transitions is sampled for the SAC policy update over 8 epochs, while a separate batch of 8,192 transitions is used for a single discriminator update epoch. Additionally, we adopted automatic $\alpha$ tuning to leverage the trade-off between exploration and exploitation based on the entropy level of the policy. The complete hyper-parameter configuration for our method is detailed in Table \ref{tab:sac_params} and Table \ref{tab:amp_params}. For the PPO+AMP baseline, we adopted the setup and hyper-parameters from \cite{Escontrela2022}.
+
+\begin{table}[h]
+\caption{SAC hyper-parameters used in training.}
+\label{tab:sac_params}
+\centering
+\begin{tabular}{lc}
+\toprule
+\textbf{Parameter} & \textbf{Value} \\
+\midrule
+Replay memory size & $1.0\times10^{7}$ \\
+Batch size & 16384 \\
+Updates per step & 8 \\
+n-step return & 3 \\
+Target smoothing coefficient $\tau$ & 0.05 \\
+Discount factor $\gamma$ & 0.99 \\
+Actor learning rate & 0.001 \\
+Entropy coefficient $\alpha$ & automatic \\
+Actor hidden layers & [1024, 512] \\
+Actor activation & GELU \\
+Critic hidden layers & [1024, 512] \\
+Critic activation & GELU \\
+Warm-up steps & 100 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[h]
+\caption{AMP hyper-parameters for imitation learning.}
+\label{tab:amp_params}
+\centering
+\begin{tabular}{lc}
+\toprule
+\textbf{Parameter} & \textbf{Value} \\
+\midrule
+AMP loss coefficient $\lambda_{AMP}$ & 0.1 \\
+Gradient penalty coefficient $\lambda_{GP}$ & 0.01 \\
+AMP batch size & 8192 \\
+AMP batch count per update & 1 \\
+AMP reward coefficient & 2.0 \\
+Pre-loaded motion transitions & $2.0\times10^{7}$ \\
+Discriminator hidden layers & [1024, 512] \\
+Minimum normalized std. & [0.01, 0.01, 0.01] \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Progressive Terrain Curriculum}
+To evaluate the robustness and generalization capabilities of the learned policies, we employed a structured terrain curriculum. This curriculum progresses from flat ground to continuous wave-like terrains characterized by a maximum undulation height of 3 cm, with varying amplitude and frequency. Each policy was warm-started from a pre-trained multi-gait model previously optimized for flat terrain. This initialization strategy accelerates learning on novel terrains by transferring the prior kinematic knowledge encoded in the policy's weights. Specifically, the weights from the pre-trained model were used to initialize the actor network before proceeding with the multi-gait training regimen on the new terrain. The core training configuration detailed in Table \ref{tab:sac_params} and Table \ref{tab:amp_params} was maintained from the warm-start model. However, to enhance training stability, we increased the number of discriminator update steps per iteration to four. The terrain difficulty automatically advanced to the next level once the policy consistently achieved a performance threshold of at least 60\% of the maximum possible reward for velocity tracking on the current terrain.
+
+\subsection{Training}
+We conducted the imitation learning experiments using 4096 parallel environments per GPU, with policies queried at 33 Hz. All experiments were performed in simulation using Isaac Gym \cite{Liang2018}, running on a workstation equipped with an NVIDIA RTX A6000 GPU and 80 GB RAM. The learned policies were evaluated on a Unitree Go2 quadruped robot with 12 actuated joints. At the beginning of each training episode, the robot is initialized with a random motion sample from the reference dataset $\mathcal{D}$, ensuring diverse starting conditions. The state representation $s\in \mathcal{S}$ includes the command velocity target, joint positions and velocities, and base orientation. The action $a\in\mathcal{A}$ corresponds to continuous joint position targets, which are fed into PD controllers to compute the motor torques. For terrain curriculum experiments, the terrain parameters are also included in the observation space.
+
+For all the experiments, the reward composition is defined by weight for the imitation task $w_{AMP}$ set to 0.6 and for the reward task set to 0.4. The detailed locomotion support reward terms and their scales are listed in Table \ref{tab:rewards}. In the complex terrain setting, the penalty for approaching joint limits was decreased to -2. Specifically, in the complex terrain experiment, we decreased the penalization to -2 to boost exploration and adaptability in the uneven surfaces. To improve policy robustness, we applied domain randomization over the ranges specified in Table \ref{tab:domain_rand}, varying the robot's base mass, the motor gain multipliers of the PD controllers, and the terrain friction coefficients.
+
+The data collection steps for the multi-gait experiment was approximately 6 billion over 40 hours, corresponding to the equivalent of 1.9 years of real-world experience. The terrain curriculum experiment involved roughly 6 million steps completed in 48 hours, equivalent to 0.69 years of real-world interaction. Training on terrain curricula proved more computationally demanding, requiring significantly longer simulation time per step.
+
+\begin{table}[h]
+\caption{Reward terms used in the locomotion task.}
+\label{tab:rewards}
+\centering
+\begin{tabular}{lc}
+\toprule
+\textbf{Reward term} & \textbf{Value} \\
+\midrule
+Tracking lin. vel. & 240.0 \\
+Lin. vel. z & -15.0 \\
+Angular vel. xy & -1.0 \\
+Angular vel. z & -5.0 \\
+Base height & -2.0 \\
+Collision & -1.0 \\
+Feet contact forces & -2.0 \\
+DoF acceleration & $-2.5\times10^{-7}$ \\
+DoF pos. limits & -4.0 \\
+Torques & $-5.0\times10^{-5}$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[h]
+\caption{Domain randomization parameters used during training.}
+\label{tab:domain_rand}
+\centering
+\begin{tabular}{lc}
+\toprule
+\textbf{Parameter} & \textbf{Range} \\
+\midrule
+Base mass (m) & [-1., 1.] \\
+PD gains factor & [0.9, 1.1] \\
+Terrain friction coefficient ($\mu$) & [0.25, 1.75] \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Comparison Metrics}
+\subsubsection{Imitation metric} We evaluate our imitation learning performance using two metrics: the task reward (total environment reward) and the discriminator reward from AMP. For a fair comparison between AMP+SAC and AMP+PPO, each seed trajectory is linearly interpolated onto a common grid every 100 training steps, and then globally normalized. Given $N$ random seeds, the mean and standard deviation at training step $t$ are computed as $\mu_{t}=\frac{1}{N}\sum_{i=1}^{N}R_{i,t}$ and $\sigma_{t}=\sqrt{\frac{1}{N}\sum_{i=1}^{N}(R_{i,t}-\mu_{t})^{2}}$, where $R_{i,t}$ denotes the normalized metric value (task or discriminator reward) from seed $i$ at step $t$. This process quantifies both the average performance and its consistency across random initialization.
+
+\subsubsection{Bio-Mechanical Parameters} We analyze locomotion performance using three representative parameters: foot contacts, which quantify the stance and swing phases of each limb; the base velocity, reflecting forward progression and gait stability; and the joint range of motion (ROM) of the front-left hip, which indicates how closely the robot reproduces the kinematic envelope of the reference motion. This multi-faceted approach allows us to evaluate performance across contact dynamics, whole-body trajectory, and detailed kinematic reproduction.
+
+\section{Results}
+
+In this section, we present the experimental results, compare them against the selected baseline, and highlight key insights. The reported outcomes are averaged over six independent runs with different random seeds in order to account for variability in training. Only one side of the robot is represented in the figures for brevity.
+
+\subsection{Evaluation across multiple motions}
+In this part, we summarize the obtained performance across the tasks considered in our study, using the implementations introduced above. Fig. \ref{fig:joint_rotations} presents the evolution of the front-left hip, thigh, and calf joint rotations along with the corresponding foot contact timings during normalized walk and trot cycles. The obtained trajectories with the proposed AMP+SAC framework closely track the re-targeted dog's reference motions, both in amplitude and in phase. From the contact patterns, it can be observed that the policy has learned to reproduce the alternating stance-swing transitions that characterize walk and trot, while performing the reward's tasks of walking forward.
+
+\begin{figure}[ht]
+    \centering
+    % \includegraphics[width=\linewidth]{fig3.png}
+    \caption{Joint rotations and foot contact timings during walk and trot cycles. Front-left hip, thigh, and calf joint rotations (rad) over normalized gait cycles (0-100\% walk, 0-100\% trot), obtained using the AMP+SAC framework, on flat terrain. (Placeholder for Fig. 3)}
+    \label{fig:joint_rotations}
+\end{figure}
+
+Fig. \ref{fig:rom_walk} and Fig. \ref{fig:rom_trot} present a comparison of the obtained ROM, including standard deviations (in rad), for the walk and trot motions. These results are evaluated against the corresponding re-targeted ROM derived from dog reference data. The figures demonstrate that the imitated motions (walk and trot) achieve joint rotations with ROM closely matching those of the reference. This indicates that the robot not only performs the task of walking straight but also effectively reproduces the underlying gait dynamics of the reference motions. Overall, the results validate that the proposed AMP+SAC framework enables the robot to acquire natural and smooth motion patterns across both walk and trot gaits.
+
+\begin{figure}[ht]
+    \centering
+    % \includegraphics[width=\linewidth]{fig4.png}
+    \caption{Comparison of joint ROM ($mean\pm std$) for the walk, on the left side, between the reference re-targeted data and our AMP+SAC implementation, on flat terrain. (Placeholder for Fig. 4)}
+    \label{fig:rom_walk}
+\end{figure}
+
+\begin{figure}[ht]
+    \centering
+    % \includegraphics[width=\linewidth]{fig5.png}
+    \caption{Comparison of joint ROM and standard deviation for the trot, on the left side, between the reference re-targeted data and our AMP+SAC implementation, on flat terrain. (Placeholder for Fig. 5)}
+    \label{fig:rom_trot}
+\end{figure}
+
+Fig. \ref{fig:vel_x} and Fig. \ref{fig:vel_z} illustrate the evolution of the robot's base velocity in the $x$ and $z$ directions, obtained with the proposed method. The policy regulates the forward velocity consistently across walk and trot motions. The results indicate that the learned policy is capable of imitating the reference, leading to stable and natural motion. Combined with the joint rotation and foot contact analysis presented above, these findings demonstrate that the proposed framework successfully learns coordinated gait dynamics that closely imitate animal (dog) motion while performing the task of walking forward.
+
+The results in Fig. \ref{fig:reward_disc} and Fig. \ref{fig:reward_total} indicate that combining SAC with AMP can provide advantages over AMP+PPO. In terms of imitation performance, AMP+SAC achieves higher discriminator rewards on average, suggesting a closer match to expert behaviors. The overall task reward shows a similar tendency, with AMP+SAC generally reaching a bit higher reward mean across runs. These findings suggest that AMP+SAC improves the imitation learning performance for multi-motion tasks compared to AMP+PPO.
+
+\begin{figure}[ht]
+    \centering
+    % \includegraphics[width=\linewidth]{fig8.png}
+    \caption{Reward discriminator ($mean \pm std$) over 50k episodes, AMP+SAC (ours) vs. AMP+PPO. On flat terrain with multiple motions. (Placeholder for Fig. 8)}
+    \label{fig:reward_disc}
+\end{figure}
+
+\begin{figure}[ht]
+    \centering
+    % \includegraphics[width=\linewidth]{fig9.png}
+    \caption{Reward ($mean \pm std$) over 50k episodes, AMP+SAC (ours) vs. AMP+PPO. On flat terrain with multiple motions. (Placeholder for Fig. 9)}
+    \label{fig:reward_total}
+\end{figure}
+
+\subsection{Evaluation across multi-terrains}
+In the second experiment, we assess the robustness of the proposed approach when transitioning from flat to wave terrain. The objective is to determine whether AMP+SAC can perform the task of walking forward, while imitating the reference under terrain perturbations. Figure \ref{fig:wave_contacts} illustrates the joint rotations (in rad) and foot contact timings over one walk cycle, on wave terrain with a maximum undulation amplitude of 3 cm. This figure shows the expected periodic walking pattern and joint trajectories with similar variations as the reference. Figure \ref{fig:wave_rom} compares the obtained joints ROM on the left side of the robot with the re-targeted reference, demonstrating that the trajectories remain closely aligned with the reference ROM.
+
+\begin{figure}[ht]
+    \centering
+    % \includegraphics[width=\linewidth]{fig10.png}
+    \caption{Joint rotations and foot contact timings during walk cycle. Front-left hip, thigh, and calf joint rotations (rad) over normalized gait cycles (0-100\% walk), obtained using the proposed AMP+SAC implementation. On wave terrain with a maximum undulation amplitude of 3 cm. (Placeholder for Fig. 10)}
+    \label{fig:wave_contacts}
+\end{figure}
+
+\begin{figure}[ht]
+    \centering
+    % \includegraphics[width=\linewidth]{fig11.png}
+    \caption{Comparison of joints ROM ($mean\pm std$) over one walk cycle, on the left side, between the reference re-targeted data and our method ($AMP+SAC$). On wave terrain with a maximum undulation amplitude of 3 cm. (Placeholder for Fig. 11)}
+    \label{fig:wave_rom}
+\end{figure}
+
+Fig. \ref{fig:wave_disc_rew} and Fig. \ref{fig:wave_total_rew} compare AMP+SAC with AMP+PPO on wave terrain IL. AMP+SAC consistently achieves higher reward discriminator value as well as higher mean task rewards than AMP+PPO. These figures suggest a close alignment of the learned policy with the reference motion and demonstrate that AMP+SAC performs well even under terrain perturbations. Overall, the findings indicate that AMP+SAC provides more stable performance than AMP+PPO for imitation learning, even on uneven terrain.
+
+\section{Discussion and Outlooks}
+
+The presented results highlight the use cases achieved in order to assess the usability of the proposed implementation. A core strength of SAC is its replay buffer, which retains short- to medium-horizon interaction histories and enables efficient reuse of past experience, leading to more effective exploration and higher sample efficiency. Although this off-policy algorithm is a promising RL approach, SAC performance is sensitive to hyperparameters, which has historically constrained its adoption. In this work, we proposed, to the best of our knowledge, the first implementation of an AMP+SAC imitation learning framework. We tested our implementation in two experiments: (i) learning two motions, and (ii) continuing imitation while the environment, in our case the terrain, is modified.
+
+The first experiment tested the capacity to learn and imitate two motions with higher mean imitation reward. The comparison was done against the re-targeted motions from a dog and the AMP+PPO \cite{Escontrela2022}. The second experiment evaluated the robustness and adaptability of our learning policy, in an uneven terrain. Under these conditions, SAC demonstrated sustained optimization of the expected return across successive epochs, even when presented with novel, unseen observations. We observed that AMP+SAC requires more training time to learn a good policy than its counterpart AMP+PPO. The reason is well established; SAC fundamentally is made for exploration. For high-dimensional tasks, this exploratory priority leads to increased sample complexity and extended training periods before policy improvement is observed. Therefore, the main limitation of our approach is training time, especially compared to PPO. Another limitation is the buffer. The combination of SAC buffer plus AMP buffer requires higher computational resources. This trade-off is decisive for real-world applications.
+
+The purpose of this work was to propose to the community a new IL implementation, adding more options to our toolbox. The full implementation will be open-sourced and made available for further experiments and optimization of the current implementation. At a time when robots are expected to evolve more and more into our everyday lives, systems must become more generalist and less specialized in a single skill or behavior. For this, an off-policy algorithm like SAC is crucial in enabling the learning of multiple skills or motions. Furthermore, the development of new and versatile IL algorithms is essential to produce smoother and more natural motions, thereby allowing robots to interact more effectively with humans in environments designed for human movements and capacities.
+
+Based on these very promising results, our future work will explore the integration of an additional small storage to bias SAC replay toward recent data for reflecting the current policy and changing AMP reward, while keeping the older transitions to avoid forgetting past experience. With this change, we aim to speed up learning and stabilize training under non-stationary conditions. Additionally, we aim to extend our framework capabilities by enabling multi-skill learning using hierarchical learning in combination with continual learning techniques to add new skills without forgetting, and expand its repertory to skills generalization. Finally, we plan to perform real-world deployment, especially in legged robots, to test the robustness and generalization of our framework addressing sim-to-real challenges.
+
+% References
+\begin{thebibliography}{10}
+
+\bibitem{Tong2024} Y. Tong, H. Liu, and Z. Zhang, "Advancements in humanoid robots: A comprehensive review and future prospects," IEEE/CAA Journal of Automatica Sinica, vol. 11, no. 2, pp. 301-328, 2024.
+
+\bibitem{Qin2025} X. Qin, X. Ma, Y. Qi, Q. Liu, C. Xue, N. Gui, Q. Dong, J. Yang, and B. Liang, "Integrating diffusion-based multi-task learning with online reinforcement learning for robust quadruped robot control," arXiv preprint arXiv:2507.05674, 2025.
+
+\bibitem{Akgun2024} O. Eren Akgün, N. Cuevas, M. Farias, and D. Garces, "Tiny reinforcement learning for quadruped locomotion using decision transformers," arXiv e-prints, pp. arXiv-2402, 2024.
+
+\bibitem{Zhang2024} Z. Zhang, T. Liu, L. Ding, H. Wang, P. Xu, H. Yang, H. Gao, Z. Deng, and J. Pajarinen, "Imitation-enhanced reinforcement learning with privileged smooth transition for hexapod locomotion," IEEE Robotics and Automation Letters, 2024.
+
+\bibitem{Budiarto2024} B. W. Budiarto, M. Syahputra, B. S. Nurpriyanto, D. Dwiyanto, and U. Y. Oktiawati, "Design and analysis of bio-inspired robotic systems for search and rescue operations," The Journal of Academic Science, vol. 1, no. 4, pp. 408-416, 2024.
+
+\bibitem{Jian2025} X. Jian, Y. Song, D. Liu, Y. Wang, X. Guo, B. Wu, and N. Zhang, "Motion planning and control of active robot in orthopedic surgery by cdmp-based imitation learning and constrained optimization," IEEE Transactions on Automation Science and Engineering, vol. 22, pp. 12197-12212, 2025.
+
+\bibitem{Zhang2025} Z. Zhang, T. Liu, L. Ding, H. Wang, P. Xu, H. Yang, H. Gao, Z. Deng, and J. Pajarinen, "Imitation-enhanced reinforcement learning with privileged smooth transition for hexapod locomotion," IEEE Robotics and Automation Letters, vol. 10, no. 1, pp. 350-357, 2025.
+
+\bibitem{Li2024} G. Li, A. Ijspeert, and M. Hayashibe, "AI-cpg: Adaptive imitated central pattern generators for bipedal locomotion learned through reinforced reflex neural networks," IEEE Robotics and Automation Letters, vol. 9, no. 6, pp. 5190-5197, 2024.
+
+\bibitem{Reske2021} A. Reske, J. Carius, Y. Ma, F. Farshidian, and M. Hutter, "Imitation learning from mpc for quadrupedal multi-gait control," in 2021 IEEE International Conference on Robotics and Automation (ICRA). IEEE, 2021, pp. 5014-5020.
+
+\bibitem{Youm2023} D. Youm, H. Jung, H. Kim, J. Hwangbo, H.-W. Park, and S. Ha, "Imitating and finetuning model predictive control for robust and symmetric quadrupedal locomotion," IEEE Robotics and Automation Letters, vol. 8, no. 11, pp. 7799-7806, 2023.
+
+\bibitem{Chen2025} Y. Chen, L. Zhao, J. Ma, and P. Lu, "In-between motion generation based multi-style quadruped robot locomotion," arXiv preprint arXiv:2507.23053, 2025.
+
+\bibitem{Zhang2024_2} C. Zhang, J. Sheng, T. Li, H. Zhang, C. Zhou, Q. Zhu, R. Zhao, Y. Zhang, and L. Han, "Learning highly dynamic behaviors for quadrupedal robots," in 2024 IEEE International Conference on Robotics and Automation (ICRA). IEEE, 2024, pp. 9183-9189.
+
+\bibitem{Schulman2017} J. Schulman, F. Wolski, P. Dhariwal, A. Radford, and O. Klimov, "Proximal policy optimization algorithms," 2017.
+
+\bibitem{Luo2024} C. Luo, Q. Zhang, S. Li, H. Chai, W. Xu, and K. Wang, "Behavior generation approach for quadruped robots based on 3d action design and proximal policy optimization," in 2024 IEEE International Conference on Unmanned Systems (ICUS). IEEE, 2024, pp. 1088-1093.
+
+\bibitem{Peng2020} X. B. Peng, E. Coumans, T. Zhang, T.-W. Lee, J. Tan, and S. Levine, "Learning agile robotic locomotion skills by imitating animals," arXiv preprint arXiv:2004.00784, 2020.
+
+\bibitem{Li2022} C. Li, S. Blaes, P. Kolev, M. Vlastelica, J. Frey, and G. Martius, "Versatile skill control via self-supervised adversarial imitation of unlabeled mixed motions," arXiv preprint arXiv:2209.07899, 2022.
+
+\bibitem{Li2023} T. Li, Y. Zhang, C. Zhang, Q. Zhu, J. Sheng, W. Chi, C. Zhou, and L. Han, "Learning terrain-adaptive locomotion with agile behaviors by imitating animals," in 2023 IEEE/RSJ International Conference on Intelligent Robots and Systems (IROS). IEEE, 2023, pp. 339-345.
+
+\bibitem{Han2024} L. Han, Q. Zhu, J. Sheng, C. Zhang, T. Li, Y. Zhang, H. Zhang, Y. Liu, C. Zhou, R. Zhao, et al., "Lifelike agility and play in quadrupedal robots using reinforcement learning and generative pre-trained models," Nature Machine Intelligence, vol. 6, no. 7, pp. 787-798, 2024.
+
+\bibitem{Xiao2025} E. Xiao, Y. Dong, J. Ma, and P. Lu, "Stable imitation of multigait and bipedal motions for quadrupedal robots over uneven terrains," Advanced Robotics Research, p. 202500036, 2025.
+
+\bibitem{Haarnoja2018} T. Haarnoja, A. Zhou, P. Abbeel, and S. Levine, "Soft actor-critic: Off-policy maximum entropy deep reinforcement learning with a stochastic actor," in International conference on machine learning, 2018.
+
+\bibitem{Peng2021} X. B. Peng, Z. Ma, P. Abbeel, S. Levine, and A. Kanazawa, "Amp: Adversarial motion priors for stylized physics-based character control," ACM Transactions on Graphics (ToG), vol. 40, no. 4, pp. 1-20, 2021.
+
+\bibitem{Escontrela2022} A. Escontrela, X. Peng, W. Yu, T. Zhang, A. Iscen, K. Goldberg, and P. Abbeel, "Adversarial motion priors make good substitutes for complex reward functions," in IEEE/RSJ IROS, 2022.
+
+\bibitem{Zhang2018} H. Zhang, S. Starke, T. Komura, and J. Saito, "Mode-adaptive neural networks for quadruped motion control," ACM Transactions on Graphics, 2018.
+
+\bibitem{Liang2018} J. Liang, V. Makoviychuk, A. Handa, N. Chentanez, M. Macklin, and D. Fox, "Gpu-accelerated robotic simulation for distributed reinforcement learning," in Conference on Robot Learning. PMLR, 2018, pp. 270-282.
+
+\end{thebibliography}
+
+\end{document}
