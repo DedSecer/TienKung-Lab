@@ -197,8 +197,8 @@ class TienKungSACWalkFlatEnvCfg:
         ),
     )
     robot: RobotCfg = RobotCfg(
-        actor_obs_history_length=10,
-        critic_obs_history_length=10,
+        actor_obs_history_length=1,   # Paper: no history, single frame observation
+        critic_obs_history_length=1,  # Paper: no history, single frame observation
         action_scale=0.25,
         terminate_contacts_body_names=["knee_pitch.*", "shoulder_roll.*", "elbow_pitch.*", "pelvis"],
         feet_body_names=["ankle_roll.*"],

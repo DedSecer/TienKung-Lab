@@ -175,9 +175,9 @@ class AMPSAC:
 
         # ===== Optimizers =====
         # Actor optimizer (with discriminator encoder as per paper)
-        actor_params = list(self.policy.actor_backbone.parameters()) + \
-                       list(self.policy.actor_mean.parameters()) + \
-                       list(self.policy.actor_log_std.parameters())
+        actor_params = list(self.policy.actor.backbone.parameters()) + \
+                       list(self.policy.actor.mean_layer.parameters()) + \
+                       list(self.policy.actor.log_std_layer.parameters())
         self.actor_optimizer = optim.AdamW(actor_params, lr=actor_lr)
         
         # Critic optimizer
@@ -479,9 +479,9 @@ class AMPSAC:
             self.actor_optimizer.zero_grad()
             actor_loss.backward()
             nn.utils.clip_grad_norm_(
-                list(self.policy.actor_backbone.parameters()) + 
-                list(self.policy.actor_mean.parameters()) + 
-                list(self.policy.actor_log_std.parameters()),
+                list(self.policy.actor.backbone.parameters()) + 
+                list(self.policy.actor.mean_layer.parameters()) + 
+                list(self.policy.actor.log_std_layer.parameters()),
                 self.max_grad_norm
             )
             self.actor_optimizer.step()

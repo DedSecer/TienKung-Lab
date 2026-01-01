@@ -31,6 +31,36 @@ from torch.distributions import Normal
 from rsl_rl.utils import resolve_nn_activation
 
 
+
+class SACActor(nn.Module):
+    """Component handling the Actor network for SAC.
+    
+    Encapsulates the backbone and output heads (mean, log_std).
+    Forward pass defaults to deterministic action for inference export.
+    """
+    def __init__(self, backbone, mean_layer, log_std_layer, action_scale, log_std_min, log_std_max):
+        super().__init__()
+        self.backbone = backbone
+        self.mean_layer = mean_layer
+        self.log_std_layer = log_std_layer
+        self.action_scale = action_scale
+        self.log_std_min = log_std_min
+        self.log_std_max = log_std_max
+
+    def forward(self, observations):
+        """Forward pass for inference (deterministic)."""
+        features = self.backbone(observations)
+        mean = self.mean_layer(features)
+        return torch.tanh(mean) * self.action_scale
+
+    def get_distribution_params(self, observations):
+        features = self.backbone(observations)
+        mean = self.mean_layer(features)
+        log_std = self.log_std_layer(features)
+        log_std = torch.clamp(log_std, self.log_std_min, self.log_std_max)
+        return mean, log_std
+
+
 class SACActorCritic(nn.Module):
     """SAC Actor-Critic with separate actor and twin Q-networks.
     
@@ -88,12 +118,22 @@ class SACActorCritic(nn.Module):
         for i in range(len(actor_hidden_dims) - 1):
             actor_layers.append(nn.Linear(actor_hidden_dims[i], actor_hidden_dims[i + 1]))
             actor_layers.append(activation_fn)
-        self.actor_backbone = nn.Sequential(*actor_layers)
+        actor_backbone = nn.Sequential(*actor_layers)
         
         # Separate heads for mean and log_std
-        self.actor_mean = nn.Linear(actor_hidden_dims[-1], num_actions)
-        self.actor_log_std = nn.Linear(actor_hidden_dims[-1], num_actions)
+        actor_mean = nn.Linear(actor_hidden_dims[-1], num_actions)
+        actor_log_std = nn.Linear(actor_hidden_dims[-1], num_actions)
         
+        # Encapsulate in SACActor module for export compatibility
+        self.actor = SACActor(
+            actor_backbone, 
+            actor_mean, 
+            actor_log_std, 
+            action_scale,
+            self.LOG_STD_MIN,
+            self.LOG_STD_MAX
+        )
+
         # ===== Twin Q-Networks (Critic) =====
         # Q1 network
         q1_layers = []
@@ -152,22 +192,18 @@ class SACActorCritic(nn.Module):
         self._action_mean = None
         self._action_std = None
         
-        print(f"SAC Actor Backbone: {self.actor_backbone}")
+        print(f"SAC Actor: {self.actor}")
         print(f"SAC Q1 Network: {self.q1}")
         print(f"SAC Q2 Network: {self.q2}")
         
         # Disable args validation for speedup
         Normal.set_default_validate_args(False)
 
-    @property
-    def actor(self):
-        return self
-
     def reset(self, dones=None):
         pass
 
-    def forward(self, observations):
-        return self.act_inference(observations)
+    def forward(self):
+        raise NotImplementedError
 
     @property
     def action_mean(self):
@@ -192,11 +228,7 @@ class SACActorCritic(nn.Module):
         Returns:
             mean, log_std of the Gaussian distribution
         """
-        features = self.actor_backbone(observations)
-        mean = self.actor_mean(features)
-        log_std = self.actor_log_std(features)
-        log_std = torch.clamp(log_std, self.LOG_STD_MIN, self.LOG_STD_MAX)
-        return mean, log_std
+        return self.actor.get_distribution_params(observations)
 
     def sample_action(self, observations, deterministic=False):
         """Sample action using reparameterization trick with tanh squashing.
