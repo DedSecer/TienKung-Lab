@@ -21,7 +21,7 @@ import argparse
 from isaaclab.app import AppLauncher
 
 from legged_lab.utils import task_registry
-from rsl_rl.runners import AmpOnPolicyRunner, OnPolicyRunner
+from rsl_rl.runners import AmpOffPolicyRunner, AmpOnPolicyRunner, OnPolicyRunner
 
 # local imports
 import legged_lab.utils.cli_args as cli_args  # isort: skip
@@ -61,7 +61,7 @@ torch.backends.cudnn.benchmark = False
 
 
 def train():
-    runner: OnPolicyRunner | AmpOnPolicyRunner
+    runner: OnPolicyRunner | AmpOnPolicyRunner | AmpOffPolicyRunner
 
     env_class_name = args_cli.task
     env_cfg, agent_cfg = task_registry.get_cfgs(env_class_name)
@@ -92,7 +92,7 @@ def train():
     if agent_cfg.run_name:
         log_dir += f"_{agent_cfg.run_name}"
     log_dir = os.path.join(log_root_path, log_dir)
-    runner_class: OnPolicyRunner | AmpOnPolicyRunner = eval(agent_cfg.runner_class_name)
+    runner_class: OnPolicyRunner | AmpOnPolicyRunner | AmpOffPolicyRunner = eval(agent_cfg.runner_class_name)
     runner = runner_class(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
 
     if agent_cfg.resume:

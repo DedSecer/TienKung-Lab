@@ -37,8 +37,11 @@ class SACReplayBuffer:
     Stores transitions (s, a, r, s', done) for experience replay.
     Supports n-step returns for improved learning efficiency.
     
-    Following paper settings:
-    - Buffer capacity: 10^7
+    NOTE: Buffer is stored on CPU to save GPU memory. 
+    Samples are moved to compute device during training.
+    
+    Following paper settings (adjusted for memory):
+    - Buffer capacity: 10^6 (reduced from 10^7 for memory efficiency)
     - Batch size: 16384
     - n-step return: 3
     """
@@ -48,7 +51,8 @@ class SACReplayBuffer:
         obs_dim: int,
         action_dim: int,
         buffer_size: int = 10_000_000,
-        device: str = "cuda:0",
+        device: str = "cuda:0",  # Compute device for sampling
+        storage_device: str = "cpu",  # Store buffer on CPU to save GPU memory
         n_step: int = 3,
         gamma: float = 0.99,
     ):
@@ -57,24 +61,26 @@ class SACReplayBuffer:
         Args:
             obs_dim: Dimension of observations
             action_dim: Dimension of actions
-            buffer_size: Maximum size of buffer (default: 10^7)
-            device: Device to store tensors
+            buffer_size: Maximum size of buffer (default: 10^6)
+            device: Device for sampled batches during training
+            storage_device: Device for storing buffer (default: CPU)
             n_step: Number of steps for n-step returns (default: 3)
             gamma: Discount factor (default: 0.99)
         """
         self.obs_dim = obs_dim
         self.action_dim = action_dim
         self.buffer_size = buffer_size
-        self.device = device
+        self.device = device  # Compute device for training
+        self.storage_device = storage_device  # Storage device (CPU to save memory)
         self.n_step = n_step
         self.gamma = gamma
         
-        # Allocate memory
-        self.observations = torch.zeros(buffer_size, obs_dim, device=device)
-        self.actions = torch.zeros(buffer_size, action_dim, device=device)
-        self.rewards = torch.zeros(buffer_size, 1, device=device)
-        self.next_observations = torch.zeros(buffer_size, obs_dim, device=device)
-        self.dones = torch.zeros(buffer_size, 1, device=device)
+        # Allocate memory on CPU to save GPU memory
+        self.observations = torch.zeros(buffer_size, obs_dim, device=storage_device)
+        self.actions = torch.zeros(buffer_size, action_dim, device=storage_device)
+        self.rewards = torch.zeros(buffer_size, 1, device=storage_device)
+        self.next_observations = torch.zeros(buffer_size, obs_dim, device=storage_device)
+        self.dones = torch.zeros(buffer_size, 1, device=storage_device)
         
         # For privileged observations (critic)
         self.privileged_observations = None
@@ -94,10 +100,10 @@ class SACReplayBuffer:
             privileged_obs_dim: Dimension of privileged observations
         """
         self.privileged_observations = torch.zeros(
-            self.buffer_size, privileged_obs_dim, device=self.device
+            self.buffer_size, privileged_obs_dim, device=self.storage_device
         )
         self.next_privileged_observations = torch.zeros(
-            self.buffer_size, privileged_obs_dim, device=self.device
+            self.buffer_size, privileged_obs_dim, device=self.storage_device
         )
 
     def insert(
@@ -124,6 +130,16 @@ class SACReplayBuffer:
             next_privileged_observations: Next privileged obs (optional)
         """
         num_transitions = observations.shape[0]
+        
+        # Move data to storage device (CPU) to save GPU memory
+        observations = observations.to(self.storage_device)
+        actions = actions.to(self.storage_device)
+        rewards = rewards.to(self.storage_device)
+        next_observations = next_observations.to(self.storage_device)
+        dones = dones.to(self.storage_device)
+        if privileged_observations is not None:
+            privileged_observations = privileged_observations.to(self.storage_device)
+            next_privileged_observations = next_privileged_observations.to(self.storage_device)
         
         # Reshape rewards and dones if needed
         if rewards.dim() == 1:
@@ -175,7 +191,7 @@ class SACReplayBuffer:
         self.size = min(self.size + num_transitions, self.buffer_size)
 
     def sample(self, batch_size: int = 16384):
-        """Sample a batch of transitions.
+        """Sample a batch of transitions and move to compute device.
         
         Args:
             batch_size: Number of transitions to sample (default: 16384)
@@ -183,22 +199,23 @@ class SACReplayBuffer:
         Returns:
             Tuple of (observations, actions, rewards, next_observations, dones)
             If privileged observations are stored, also returns them.
+            All tensors are moved to the compute device (GPU).
         """
         indices = np.random.choice(self.size, size=batch_size, replace=False)
-        indices = torch.from_numpy(indices).to(self.device)
         
+        # Sample from CPU storage and move to compute device
         batch = (
-            self.observations[indices],
-            self.actions[indices],
-            self.rewards[indices],
-            self.next_observations[indices],
-            self.dones[indices],
+            self.observations[indices].to(self.device),
+            self.actions[indices].to(self.device),
+            self.rewards[indices].to(self.device),
+            self.next_observations[indices].to(self.device),
+            self.dones[indices].to(self.device),
         )
         
         if self.privileged_observations is not None:
             batch = batch + (
-                self.privileged_observations[indices],
-                self.next_privileged_observations[indices],
+                self.privileged_observations[indices].to(self.device),
+                self.next_privileged_observations[indices].to(self.device),
             )
         
         return batch
