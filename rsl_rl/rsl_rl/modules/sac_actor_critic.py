@@ -159,8 +159,9 @@ class SACActorCritic(nn.Module):
         # Disable args validation for speedup
         Normal.set_default_validate_args(False)
 
-        # Alias for compatibility with RSL-RL exporter
-        self.actor = self
+    @property
+    def actor(self):
+        return self
 
     def reset(self, dones=None):
         pass
