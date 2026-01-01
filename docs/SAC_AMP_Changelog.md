@@ -4,6 +4,39 @@
 
 ---
 
+## 2026-01-01 (Update 3)
+
+### 9. 移除 Actor Loss 中错误的 Gradient Penalty
+
+**问题**: Actor loss 中包含了在 policy 数据上计算的 gradient penalty，这不符合论文设计。
+
+**论文公式 (2)** 明确指出 gradient penalty 只应用在 **expert 数据**上：
+```
+w^{gp}/2 · E_{(s,s')~D}[||∇_φ D_φ(s,s')||²]  (D = expert dataset)
+```
+
+**原实现** (错误):
+```python
+# 在 policy 数据上计算 gradient penalty
+amp_grad_pen_actor = self.discriminator.compute_grad_pen(
+    policy_state_norm, policy_next_state_norm, lambda_=10
+)
+actor_loss = sac_loss + amp_loss + amp_grad_penalty_coef * amp_grad_pen_actor
+```
+
+**修复后**:
+```python
+# Actor loss 只包含 SAC loss 和 AMP adversarial loss
+# Gradient penalty 只在 Discriminator 更新时使用（在 expert 数据上）
+actor_loss = sac_actor_loss + amp_loss_coef * amp_actor_loss
+```
+
+**影响**: 错误的 gradient penalty 会抑制 actor 的梯度流，影响学习效率。
+
+**文件**: `rsl_rl/rsl_rl/algorithms/amp_sac.py`
+
+---
+
 ## 2026-01-01 (Update 2)
 
 ### 8. 🔴 修复 N-Step Return 跨环境数据混合 Bug (Critical)

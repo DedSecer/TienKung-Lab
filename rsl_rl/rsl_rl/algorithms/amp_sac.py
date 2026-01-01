@@ -470,14 +470,11 @@ class AMPSAC:
             # This encourages the policy to generate transitions that fool the discriminator
             amp_actor_loss = F.mse_loss(policy_d_for_actor, torch.ones_like(policy_d_for_actor))
             
-            # Gradient penalty on policy transitions (optional, for regularization)
-            amp_grad_pen_actor = self.discriminator.compute_grad_pen(
-                policy_state_norm, policy_next_state_norm, lambda_=10
-            )
-            
             # Combined Actor Loss (Paper Formula 4)
-            # J_π^AMP = J_π + λ_AMP · L_AMP + λ_grad · L_grad
-            actor_loss = sac_actor_loss + self.amp_loss_coef * amp_actor_loss + self.amp_grad_penalty_coef * amp_grad_pen_actor
+            # J_π^AMP = J_π + λ_AMP · L_AMP
+            # Note: Gradient penalty is only for discriminator regularization (on expert data),
+            # not included in actor loss per paper formula (2)
+            actor_loss = sac_actor_loss + self.amp_loss_coef * amp_actor_loss
             
             # Update actor only (discriminator updated separately outside loop)
             self.actor_optimizer.zero_grad()
