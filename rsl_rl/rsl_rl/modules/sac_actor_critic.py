@@ -159,11 +159,14 @@ class SACActorCritic(nn.Module):
         # Disable args validation for speedup
         Normal.set_default_validate_args(False)
 
+        # Alias for compatibility with RSL-RL exporter
+        self.actor = self
+
     def reset(self, dones=None):
         pass
 
-    def forward(self):
-        raise NotImplementedError
+    def forward(self, observations):
+        return self.act_inference(observations)
 
     @property
     def action_mean(self):
