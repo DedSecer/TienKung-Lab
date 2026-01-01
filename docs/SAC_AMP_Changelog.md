@@ -146,3 +146,32 @@ amp_actor_loss = F.mse_loss(policy_d_for_actor, torch.ones_like(policy_d_for_act
 
 **结论**: 当前实现是 model-free 深度 RL 中的标准做法，与 AMP+PPO 的实现方式一致。
 
+---
+
+### 7. 移除 Observation History (符合论文设计)
+
+**问题**: 原实现使用 10 帧历史观测，导致 observation 维度过大，SAC Replay Buffer 内存占用约 115GB。
+
+**论文 Section III-D**:
+> "The state representation $s \in \mathcal{S}$ includes the command velocity target, joint positions and velocities, and base orientation."
+
+论文中 **没有使用 observation history**，只使用单帧观测。
+
+**修复**:
+```python
+robot: RobotCfg = RobotCfg(
+    actor_obs_history_length=1,   # 从 10 改为 1
+    critic_obs_history_length=1,  # 从 10 改为 1
+    ...
+)
+```
+
+**内存影响**:
+| 配置 | actor_obs_dim | critic_obs_dim | SAC Buffer 内存 |
+|------|---------------|----------------|-----------------|
+| 原实现 (history=10) | 690 | 740 | ~115 GB |
+| 修复后 (history=1) | 69 | 74 | ~12 GB |
+
+**文件**: 
+- `legged_lab/envs/tienkung/sac_amp_walk_cfg.py`
+- `legged_lab/envs/tienkung/sac_amp_run_cfg.py`
