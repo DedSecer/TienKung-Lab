@@ -4,6 +4,55 @@
 
 ---
 
+## 2026-01-01 (Update 2)
+
+### 8. 🔴 修复 N-Step Return 跨环境数据混合 Bug (Critical)
+
+**问题**: 原实现将 4096 个并行环境的数据扁平化存储，导致 n-step 采样时错误地混合了不同环境的数据。
+
+**原 Buffer 布局**:
+```
+index:  0      1      2      ...   4095   4096   4097   ...
+        Env0   Env1   Env2   ...   Env4095 Env0   Env1   ...
+        (t=0)  (t=0)  (t=0)  ...   (t=0)   (t=1)  (t=1)  ...
+```
+
+**原采样逻辑** (错误):
+```python
+# 从 index=0 开始，n_step=3
+step_indices = [0, 1, 2]  # 实际采样: Env0_t0, Env1_t0, Env2_t0
+# 错误地计算: R = r(Env0,t0) + γ·r(Env1,t0) + γ²·r(Env2,t0)
+```
+
+**修复后 Buffer 布局**:
+```
+Shape: [buffer_size, num_envs, dim]
+
+time=0: [Env0_t0, Env1_t0, ..., Env4095_t0]
+time=1: [Env0_t1, Env1_t1, ..., Env4095_t1]
+...
+```
+
+**修复后采样逻辑** (正确):
+```python
+# 采样 (time_index, env_index) 对
+time_indices = [t0, t0, t0, ...]  # 随机时间起点
+env_indices = [e0, e1, e2, ...]   # 随机环境
+
+# N-step 沿时间维度累积，保持环境一致
+for step in range(n_step):
+    step_time = time_indices + step
+    step_rewards = rewards[step_time, env_indices]  # 同一环境的连续时间步
+```
+
+**影响**: 这是一个严重的 bug，会导致 Q-value 估计完全错误，训练无法收敛或收敛到错误的策略。
+
+**文件**: 
+- `rsl_rl/rsl_rl/storage/sac_replay_buffer.py` (重写)
+- `rsl_rl/rsl_rl/algorithms/amp_sac.py` (更新 init_storage)
+
+---
+
 ## 2026-01-01
 
 ### 1. Actor Loss 加入 AMP 损失项

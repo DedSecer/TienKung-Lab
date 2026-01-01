@@ -249,8 +249,10 @@ class AMPSAC:
         action_dim = actions_shape[0]
         privileged_obs_dim = critic_obs_shape[0]
         
-        # SAC replay buffer
+        # SAC replay buffer with proper parallel environment support
+        # Buffer shape: [buffer_size, num_envs, dim] for correct n-step returns
         self.sac_storage = SACReplayBuffer(
+            num_envs=num_envs,
             obs_dim=obs_dim,
             action_dim=action_dim,
             buffer_size=self.sac_replay_buffer_size,
