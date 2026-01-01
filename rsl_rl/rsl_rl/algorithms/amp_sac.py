@@ -378,22 +378,24 @@ class AMPSAC:
 
         # Multiple updates per step (paper: 8 epochs)
         for _ in range(self.updates_per_step):
-            # ===== Sample from SAC replay buffer =====
+            # ===== Sample from SAC replay buffer (with n-step returns) =====
             batch = self.sac_storage.sample(self.batch_size)
-            obs, actions, rewards, next_obs, dones = batch[:5]
-            if len(batch) > 5:
-                privileged_obs, next_privileged_obs = batch[5], batch[6]
+            # batch now includes n-step gamma as the 6th element
+            obs, actions, n_step_rewards, next_obs, dones, n_step_gammas = batch[:6]
+            if len(batch) > 6:
+                privileged_obs, next_privileged_obs = batch[6], batch[7]
             else:
                 privileged_obs, next_privileged_obs = obs, next_obs
 
-            # ===== Update Critic (Q-networks) =====
+            # ===== Update Critic (Q-networks) with n-step returns =====
             with torch.no_grad():
                 # Sample next action and compute target Q
                 next_actions, next_log_prob, _ = self.policy.sample_action(next_obs)
                 q1_target, q2_target = self.policy.get_target_q_values(next_privileged_obs, next_actions)
                 min_q_target = torch.min(q1_target, q2_target)
-                # Soft Q target with entropy bonus
-                target_q = rewards + (1 - dones) * self.gamma * (min_q_target - self.alpha * next_log_prob)
+                # n-step Soft Q target: R_n + γ^n * (Q_target - α * log_prob)
+                # where R_n is the n-step cumulative discounted reward
+                target_q = n_step_rewards + (1 - dones) * n_step_gammas * (min_q_target - self.alpha * next_log_prob)
 
             # Current Q estimates
             q1, q2 = self.policy.get_q_values(privileged_obs, actions)

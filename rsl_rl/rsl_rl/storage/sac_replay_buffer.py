@@ -191,25 +191,98 @@ class SACReplayBuffer:
         self.size = min(self.size + num_transitions, self.buffer_size)
 
     def sample(self, batch_size: int = 16384):
-        """Sample a batch of transitions and move to compute device.
+        """Sample a batch of transitions with n-step returns.
+        
+        When n_step > 1, computes:
+        - n-step cumulative reward: r_t + γ*r_{t+1} + γ²*r_{t+2} + ... + γ^{n-1}*r_{t+n-1}
+        - n-step next state: s_{t+n}
+        - n-step done: whether episode ended within n steps
+        - n-step gamma: γ^n (for target computation)
         
         Args:
             batch_size: Number of transitions to sample (default: 16384)
             
         Returns:
-            Tuple of (observations, actions, rewards, next_observations, dones)
+            Tuple of (observations, actions, n_step_rewards, n_step_next_observations, 
+                      n_step_dones, n_step_gamma)
             If privileged observations are stored, also returns them.
             All tensors are moved to the compute device (GPU).
         """
-        indices = np.random.choice(self.size, size=batch_size, replace=False)
+        # Sample starting indices (ensure we have n_step valid transitions ahead)
+        max_start_idx = self.size - self.n_step
+        if max_start_idx <= 0:
+            # Not enough samples for n-step, fall back to 1-step
+            return self._sample_1step(batch_size)
+        
+        # Sample start indices
+        start_indices = np.random.choice(max_start_idx, size=batch_size, replace=True)
+        
+        # Initialize n-step returns
+        n_step_rewards = torch.zeros(batch_size, 1, device=self.storage_device)
+        n_step_dones = torch.zeros(batch_size, 1, device=self.storage_device)
+        n_step_gammas = torch.ones(batch_size, 1, device=self.storage_device) * (self.gamma ** self.n_step)
+        
+        # Compute n-step rewards and find terminal states
+        discount = 1.0
+        for step in range(self.n_step):
+            step_indices = (start_indices + step) % self.buffer_size
+            step_rewards = self.rewards[step_indices]
+            step_dones = self.dones[step_indices]
+            
+            # Accumulate discounted rewards
+            n_step_rewards += discount * step_rewards * (1 - n_step_dones)
+            
+            # Check for episode termination
+            # If episode terminates at step k < n, we use s_{t+k+1} and γ^{k+1}
+            terminated_mask = (step_dones > 0) & (n_step_dones == 0)
+            n_step_dones = torch.maximum(n_step_dones, step_dones)
+            
+            # Update gamma for terminated episodes
+            if step < self.n_step - 1:
+                n_step_gammas[terminated_mask.squeeze()] = self.gamma ** (step + 1)
+            
+            discount *= self.gamma
+        
+        # Get n-step next observations (or terminal state if episode ended)
+        # For simplicity, we use the state at t+n (or the last valid state)
+        n_step_next_indices = (start_indices + self.n_step) % self.buffer_size
         
         # Sample from CPU storage and move to compute device
+        batch = (
+            self.observations[start_indices].to(self.device),
+            self.actions[start_indices].to(self.device),
+            n_step_rewards.to(self.device),
+            self.next_observations[n_step_next_indices].to(self.device),
+            n_step_dones.to(self.device),
+            n_step_gammas.to(self.device),  # Return the effective gamma for each sample
+        )
+        
+        if self.privileged_observations is not None:
+            batch = batch + (
+                self.privileged_observations[start_indices].to(self.device),
+                self.next_privileged_observations[n_step_next_indices].to(self.device),
+            )
+        
+        return batch
+
+    def _sample_1step(self, batch_size: int):
+        """Fallback 1-step sampling when buffer is too small for n-step.
+        
+        Args:
+            batch_size: Number of transitions to sample
+            
+        Returns:
+            Standard 1-step transitions with gamma as additional output
+        """
+        indices = np.random.choice(self.size, size=min(batch_size, self.size), replace=True)
+        
         batch = (
             self.observations[indices].to(self.device),
             self.actions[indices].to(self.device),
             self.rewards[indices].to(self.device),
             self.next_observations[indices].to(self.device),
             self.dones[indices].to(self.device),
+            torch.ones(len(indices), 1, device=self.device) * self.gamma,  # 1-step gamma
         )
         
         if self.privileged_observations is not None:
