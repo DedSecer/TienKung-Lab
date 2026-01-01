@@ -20,5 +20,6 @@
 
 from .replay_buffer import ReplayBuffer
 from .rollout_storage import RolloutStorage
+from .sac_replay_buffer import SACReplayBuffer
 
-__all__ = ["RolloutStorage", "ReplayBuffer"]
+__all__ = ["RolloutStorage", "ReplayBuffer", "SACReplayBuffer"]

@@ -32,8 +32,18 @@ from legged_lab.envs.tienkung.walk_with_sensor_cfg import (
     TienKungWalkWithSensorAgentCfg,
     TienKungWalkWithSensorFlatEnvCfg,
 )
+# SAC+AMP configurations
+from legged_lab.envs.tienkung.sac_amp_walk_cfg import (
+    TienKungSACWalkAgentCfg,
+    TienKungSACWalkFlatEnvCfg,
+)
+from legged_lab.envs.tienkung.sac_amp_run_cfg import (
+    TienKungSACRunAgentCfg,
+    TienKungSACRunFlatEnvCfg,
+)
 from legged_lab.utils.task_registry import task_registry
 
+# Register PPO-based tasks
 task_registry.register("walk", TienKungEnv, TienKungWalkFlatEnvCfg(), TienKungWalkAgentCfg())
 task_registry.register("run", TienKungEnv, TienKungRunFlatEnvCfg(), TienKungRunAgentCfg())
 task_registry.register(
@@ -42,3 +52,8 @@ task_registry.register(
 task_registry.register(
     "run_with_sensor", TienKungEnv, TienKungRunWithSensorFlatEnvCfg(), TienKungRunWithSensorAgentCfg()
 )
+
+# Register SAC+AMP tasks (based on paper: "Unlocking the Potential of Soft Actor-Critic for Imitation Learning")
+task_registry.register("sac_amp_walk", TienKungEnv, TienKungSACWalkFlatEnvCfg(), TienKungSACWalkAgentCfg())
+task_registry.register("sac_amp_run", TienKungEnv, TienKungSACRunFlatEnvCfg(), TienKungSACRunAgentCfg())
+
