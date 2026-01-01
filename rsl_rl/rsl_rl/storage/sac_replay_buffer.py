@@ -195,9 +195,9 @@ class SACReplayBuffer:
         
         When n_step > 1, computes:
         - n-step cumulative reward: r_t + γ*r_{t+1} + γ²*r_{t+2} + ... + γ^{n-1}*r_{t+n-1}
-        - n-step next state: s_{t+n}
+        - n-step next state: s_{t+k} where k is the termination step (or n if no termination)
         - n-step done: whether episode ended within n steps
-        - n-step gamma: γ^n (for target computation)
+        - n-step gamma: γ^k (for target computation)
         
         Args:
             batch_size: Number of transitions to sample (default: 16384)
@@ -222,6 +222,11 @@ class SACReplayBuffer:
         n_step_dones = torch.zeros(batch_size, 1, device=self.storage_device)
         n_step_gammas = torch.ones(batch_size, 1, device=self.storage_device) * (self.gamma ** self.n_step)
         
+        # Track the effective next_obs index for each sample
+        # Default: use t+n-1's next_obs (which is s_{t+n})
+        # If terminated at step k < n: use t+k's next_obs (which is s_{t+k+1}, the terminal state)
+        effective_next_indices = np.array((start_indices + self.n_step - 1) % self.buffer_size)
+        
         # Compute n-step rewards and find terminal states
         discount = 1.0
         for step in range(self.n_step):
@@ -229,38 +234,42 @@ class SACReplayBuffer:
             step_rewards = self.rewards[step_indices]
             step_dones = self.dones[step_indices]
             
-            # Accumulate discounted rewards
+            # Accumulate discounted rewards (only for non-terminated samples)
             n_step_rewards += discount * step_rewards * (1 - n_step_dones)
             
             # Check for episode termination
-            # If episode terminates at step k < n, we use s_{t+k+1} and γ^{k+1}
-            terminated_mask = (step_dones > 0) & (n_step_dones == 0)
+            # If episode terminates at step k < n:
+            # - We should use next_obs from step k (the terminal state)
+            # - gamma becomes γ^{k+1}
+            terminated_now = (step_dones > 0) & (n_step_dones == 0)
+            terminated_now_np = terminated_now.squeeze().cpu().numpy()
+            
+            # Update effective next indices for newly terminated samples
+            # Use step_indices (where done=True) to get the terminal next_obs
+            if terminated_now_np.any():
+                effective_next_indices[terminated_now_np] = step_indices[terminated_now_np]
+                # Update gamma for terminated episodes: γ^{step+1}
+                n_step_gammas[terminated_now] = self.gamma ** (step + 1)
+            
+            # Mark as done
             n_step_dones = torch.maximum(n_step_dones, step_dones)
             
-            # Update gamma for terminated episodes
-            if step < self.n_step - 1:
-                n_step_gammas[terminated_mask.squeeze()] = self.gamma ** (step + 1)
-            
             discount *= self.gamma
-        
-        # Get n-step next observations (or terminal state if episode ended)
-        # For simplicity, we use the state at t+n (or the last valid state)
-        n_step_next_indices = (start_indices + self.n_step) % self.buffer_size
         
         # Sample from CPU storage and move to compute device
         batch = (
             self.observations[start_indices].to(self.device),
             self.actions[start_indices].to(self.device),
             n_step_rewards.to(self.device),
-            self.next_observations[n_step_next_indices].to(self.device),
+            self.next_observations[effective_next_indices].to(self.device),  # Use correct terminal state
             n_step_dones.to(self.device),
-            n_step_gammas.to(self.device),  # Return the effective gamma for each sample
+            n_step_gammas.to(self.device),
         )
         
         if self.privileged_observations is not None:
             batch = batch + (
                 self.privileged_observations[start_indices].to(self.device),
-                self.next_privileged_observations[n_step_next_indices].to(self.device),
+                self.next_privileged_observations[effective_next_indices].to(self.device),
             )
         
         return batch
