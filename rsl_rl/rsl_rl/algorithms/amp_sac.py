@@ -174,7 +174,9 @@ class AMPSAC:
         self.alpha_optimizer = optim.AdamW([self.log_alpha], lr=alpha_lr)
 
         # ===== Optimizers =====
-        # Actor optimizer (with discriminator encoder as per paper)
+        # Actor optimizer
+        # Note: AMP loss flows through discriminator but only actor params are updated here.
+        # Discriminator is updated separately with lower frequency (1x vs 8x per step).
         actor_params = list(self.policy.actor.backbone.parameters()) + \
                        list(self.policy.actor.mean_layer.parameters()) + \
                        list(self.policy.actor.log_std_layer.parameters())
@@ -477,7 +479,7 @@ class AMPSAC:
             # J_π^AMP = J_π + λ_AMP · L_AMP + λ_grad · L_grad
             actor_loss = sac_actor_loss + self.amp_loss_coef * amp_actor_loss + self.amp_grad_penalty_coef * amp_grad_pen_actor
             
-            # Update actor (and implicitly discriminator encoder via gradient flow)
+            # Update actor only (discriminator updated separately outside loop)
             self.actor_optimizer.zero_grad()
             actor_loss.backward()
             nn.utils.clip_grad_norm_(

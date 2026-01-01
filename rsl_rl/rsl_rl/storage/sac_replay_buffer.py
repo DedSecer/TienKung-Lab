@@ -20,7 +20,7 @@
 
 Based on the paper: "Unlocking the Potential of Soft Actor-Critic for Imitation Learning"
 Paper settings:
-- Replay memory size: 10^7
+- Replay memory size: 10^7 (total transitions)
 - Batch size: 16384
 - n-step return: 3
 
@@ -29,7 +29,8 @@ environments run in parallel. The buffer maintains temporal consistency per
 environment to correctly compute n-step returns.
 
 Buffer Layout:
-- Shape: [buffer_size, num_envs, dim]
+- Shape: [time_capacity, num_envs, dim]
+- time_capacity = total_buffer_size // num_envs
 - Each time index stores data from ALL environments at that timestep
 - N-step sampling operates along the time dimension for each environment
 """
@@ -50,7 +51,8 @@ class SACReplayBuffer:
     Samples are moved to compute device during training.
     
     Key Design:
-    - Buffer shape: [buffer_size, num_envs, dim]
+    - Buffer shape: [time_capacity, num_envs, dim]
+    - time_capacity is computed from total_buffer_size // num_envs
     - Time index (ptr) advances once per step across ALL environments
     - N-step return correctly accumulates rewards along time dimension per env
     """
@@ -72,7 +74,8 @@ class SACReplayBuffer:
             num_envs: Number of parallel environments
             obs_dim: Dimension of observations
             action_dim: Dimension of actions
-            buffer_size: Maximum number of timesteps to store (default: 10^6)
+            buffer_size: Total number of transitions to store (default: 10^7)
+                         Will be divided by num_envs to get time_capacity
             device: Device for sampled batches during training
             storage_device: Device for storing buffer (default: CPU)
             n_step: Number of steps for n-step returns (default: 3)
@@ -81,19 +84,29 @@ class SACReplayBuffer:
         self.num_envs = num_envs
         self.obs_dim = obs_dim
         self.action_dim = action_dim
-        self.buffer_size = buffer_size
         self.device = device
         self.storage_device = storage_device
         self.n_step = n_step
         self.gamma = gamma
         
-        # Allocate memory on CPU: [buffer_size, num_envs, dim]
+        # Compute time capacity from total buffer size
+        # buffer_size is total transitions, divide by num_envs to get timesteps
+        self.time_capacity = buffer_size // num_envs
+        self.total_capacity = self.time_capacity * num_envs
+        
+        print(f"[SACReplayBuffer] Initializing with:")
+        print(f"  - num_envs: {num_envs}")
+        print(f"  - time_capacity: {self.time_capacity} timesteps")
+        print(f"  - total_capacity: {self.total_capacity} transitions")
+        print(f"  - obs_dim: {obs_dim}, action_dim: {action_dim}")
+        
+        # Allocate memory on CPU: [time_capacity, num_envs, dim]
         # Each time index stores data from all environments at that timestep
-        self.observations = torch.zeros(buffer_size, num_envs, obs_dim, device=storage_device)
-        self.actions = torch.zeros(buffer_size, num_envs, action_dim, device=storage_device)
-        self.rewards = torch.zeros(buffer_size, num_envs, 1, device=storage_device)
-        self.next_observations = torch.zeros(buffer_size, num_envs, obs_dim, device=storage_device)
-        self.dones = torch.zeros(buffer_size, num_envs, 1, device=storage_device)
+        self.observations = torch.zeros(self.time_capacity, num_envs, obs_dim, device=storage_device)
+        self.actions = torch.zeros(self.time_capacity, num_envs, action_dim, device=storage_device)
+        self.rewards = torch.zeros(self.time_capacity, num_envs, 1, device=storage_device)
+        self.next_observations = torch.zeros(self.time_capacity, num_envs, obs_dim, device=storage_device)
+        self.dones = torch.zeros(self.time_capacity, num_envs, 1, device=storage_device)
         
         # For privileged observations (critic)
         self.privileged_observations = None
@@ -110,10 +123,10 @@ class SACReplayBuffer:
             privileged_obs_dim: Dimension of privileged observations
         """
         self.privileged_observations = torch.zeros(
-            self.buffer_size, self.num_envs, privileged_obs_dim, device=self.storage_device
+            self.time_capacity, self.num_envs, privileged_obs_dim, device=self.storage_device
         )
         self.next_privileged_observations = torch.zeros(
-            self.buffer_size, self.num_envs, privileged_obs_dim, device=self.storage_device
+            self.time_capacity, self.num_envs, privileged_obs_dim, device=self.storage_device
         )
 
     def insert(
@@ -164,8 +177,8 @@ class SACReplayBuffer:
             self.next_privileged_observations[self.ptr] = next_privileged_observations
         
         # Advance pointer
-        self.ptr = (self.ptr + 1) % self.buffer_size
-        self.size = min(self.size + 1, self.buffer_size)
+        self.ptr = (self.ptr + 1) % self.time_capacity
+        self.size = min(self.size + 1, self.time_capacity)
 
     def sample(self, batch_size: int = 16384):
         """Sample a batch of transitions with n-step returns.
@@ -203,12 +216,12 @@ class SACReplayBuffer:
         
         # Track effective next state time index
         # Default: t + n - 1 (to get next_obs which is s_{t+n})
-        effective_next_time = np.array((time_indices + self.n_step - 1) % self.buffer_size)
+        effective_next_time = np.array((time_indices + self.n_step - 1) % self.time_capacity)
         
         # Compute n-step rewards along time dimension
         discount = 1.0
         for step in range(self.n_step):
-            step_time = (time_indices + step) % self.buffer_size
+            step_time = (time_indices + step) % self.time_capacity
             
             # Get rewards and dones for this step [batch_size, 1]
             step_rewards = self.rewards[step_time, env_indices]
