@@ -370,13 +370,17 @@ class AMPSAC:
         total_critic_loss = 0.0
         total_actor_loss = 0.0
         total_alpha_loss = 0.0
-        total_amp_loss = 0.0
-        total_grad_pen_loss = 0.0
-        mean_policy_pred = 0.0
-        mean_expert_pred = 0.0
         mean_entropy = 0.0
+        
+        # Store last AMP batch for discriminator update (outside loop)
+        last_policy_state_norm = None
+        last_policy_next_state_norm = None
+        last_expert_state_norm = None
+        last_expert_next_state_norm = None
+        last_policy_state = None
+        last_expert_state = None
 
-        # Multiple updates per step (paper: 8 epochs)
+        # Multiple SAC updates per step (paper: 8 epochs for SAC)
         for _ in range(self.updates_per_step):
             # ===== Sample from SAC replay buffer (with n-step returns) =====
             batch = self.sac_storage.sample(self.batch_size)
@@ -412,7 +416,7 @@ class AMPSAC:
             )
             self.critic_optimizer.step()
 
-            # ===== Compute AMP Discriminator Loss (needed for both Actor and Discriminator) =====
+            # ===== Sample AMP data for Actor loss =====
             # Sample from AMP buffers
             amp_policy_batch = list(self.amp_storage.feed_forward_generator(1, self.amp_batch_size))[0]
             amp_expert_batch = list(self.amp_data.feed_forward_generator(1, self.amp_batch_size))[0]
@@ -433,10 +437,13 @@ class AMPSAC:
                 expert_state_norm = expert_state
                 expert_next_state_norm = expert_next_state
             
-            # Discriminator predictions (for logging)
-            with torch.no_grad():
-                policy_d_for_log = self.discriminator(torch.cat([policy_state_norm, policy_next_state_norm], dim=-1))
-                expert_d_for_log = self.discriminator(torch.cat([expert_state_norm, expert_next_state_norm], dim=-1))
+            # Store last batch for discriminator update (after loop)
+            last_policy_state_norm = policy_state_norm
+            last_policy_next_state_norm = policy_next_state_norm
+            last_expert_state_norm = expert_state_norm
+            last_expert_next_state_norm = expert_next_state_norm
+            last_policy_state = policy_state
+            last_expert_state = expert_state
 
             # ===== Update Actor with AMP Loss (Paper Formula 4) =====
             # J_π^AMP(θ) = J_π(θ) + λ_AMP · L_AMP + λ_grad · L_grad
@@ -493,43 +500,47 @@ class AMPSAC:
             # ===== Update Target Networks =====
             self.policy.soft_update_target(self.tau)
 
-            # ===== Update AMP Discriminator =====
-            # Discriminator predictions (with gradient for discriminator update)
-            policy_d = self.discriminator(torch.cat([policy_state_norm, policy_next_state_norm], dim=-1))
-            expert_d = self.discriminator(torch.cat([expert_state_norm, expert_next_state_norm], dim=-1))
-            
-            # Discriminator loss (least-squares GAN)
-            # Expert: label = 1, Policy: label = -1
-            expert_loss = F.mse_loss(expert_d, torch.ones_like(expert_d))
-            policy_loss = F.mse_loss(policy_d, -1 * torch.ones_like(policy_d))
-            amp_disc_loss = 0.5 * (expert_loss + policy_loss)
-            
-            # Gradient penalty on expert transitions (for discriminator stability)
-            grad_pen_loss = self.discriminator.compute_grad_pen(
-                expert_state_norm, expert_next_state_norm, lambda_=10
-            )
-            
-            # Total discriminator loss
-            disc_loss = self.amp_loss_coef * amp_disc_loss + self.amp_grad_penalty_coef * grad_pen_loss
-            
-            # Update discriminator
-            self.discriminator_optimizer.zero_grad()
-            disc_loss.backward()
-            self.discriminator_optimizer.step()
-            
-            # Update normalizer
-            if self.amp_normalizer is not None:
-                self.amp_normalizer.update(policy_state.cpu().numpy())
-                self.amp_normalizer.update(expert_state.cpu().numpy())
-
             # Accumulate for logging
             total_critic_loss += critic_loss.item()
             total_actor_loss += actor_loss.item()
-            total_amp_loss += amp_disc_loss.item()
-            total_grad_pen_loss += grad_pen_loss.item()
-            mean_policy_pred += policy_d_for_log.mean().item()
-            mean_expert_pred += expert_d_for_log.mean().item()
             mean_entropy += (-log_prob.mean()).item()
+
+        # ===== Update AMP Discriminator (1 epoch per step, as per paper) =====
+        # This is moved OUTSIDE the loop to match paper specification:
+        # SAC: 8 updates per step, AMP Discriminator: 1 update per step
+        
+        # Discriminator predictions (for logging)
+        with torch.no_grad():
+            policy_d_for_log = self.discriminator(torch.cat([last_policy_state_norm, last_policy_next_state_norm], dim=-1))
+            expert_d_for_log = self.discriminator(torch.cat([last_expert_state_norm, last_expert_next_state_norm], dim=-1))
+        
+        # Discriminator predictions (with gradient for discriminator update)
+        policy_d = self.discriminator(torch.cat([last_policy_state_norm, last_policy_next_state_norm], dim=-1))
+        expert_d = self.discriminator(torch.cat([last_expert_state_norm, last_expert_next_state_norm], dim=-1))
+        
+        # Discriminator loss (least-squares GAN)
+        # Expert: label = 1, Policy: label = -1
+        expert_loss = F.mse_loss(expert_d, torch.ones_like(expert_d))
+        policy_loss = F.mse_loss(policy_d, -1 * torch.ones_like(policy_d))
+        amp_disc_loss = 0.5 * (expert_loss + policy_loss)
+        
+        # Gradient penalty on expert transitions (for discriminator stability)
+        grad_pen_loss = self.discriminator.compute_grad_pen(
+            last_expert_state_norm, last_expert_next_state_norm, lambda_=10
+        )
+        
+        # Total discriminator loss
+        disc_loss = self.amp_loss_coef * amp_disc_loss + self.amp_grad_penalty_coef * grad_pen_loss
+        
+        # Update discriminator
+        self.discriminator_optimizer.zero_grad()
+        disc_loss.backward()
+        self.discriminator_optimizer.step()
+        
+        # Update normalizer
+        if self.amp_normalizer is not None:
+            self.amp_normalizer.update(last_policy_state.cpu().numpy())
+            self.amp_normalizer.update(last_expert_state.cpu().numpy())
 
         # Average losses
         num_updates = self.updates_per_step
@@ -537,10 +548,10 @@ class AMPSAC:
             "value_function": total_critic_loss / num_updates,
             "surrogate": total_actor_loss / num_updates,
             "entropy": mean_entropy / num_updates,
-            "amp": total_amp_loss / num_updates,
-            "amp_grad_pen": total_grad_pen_loss / num_updates,
-            "amp_policy_pred": mean_policy_pred / num_updates,
-            "amp_expert_pred": mean_expert_pred / num_updates,
+            "amp": amp_disc_loss.item(),  # Single discriminator update
+            "amp_grad_pen": grad_pen_loss.item(),  # Single discriminator update
+            "amp_policy_pred": policy_d_for_log.mean().item(),  # Single discriminator update
+            "amp_expert_pred": expert_d_for_log.mean().item(),  # Single discriminator update
             "alpha": self.alpha,
         }
 

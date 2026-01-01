@@ -68,3 +68,28 @@ actor_loss = sac_loss + amp_loss_coef * amp_actor_loss + amp_grad_penalty_coef *
 **修复**: 在 `resolve_nn_activation()` 添加 GELU 支持。
 
 **文件**: `rsl_rl/rsl_rl/utils/utils.py`
+
+---
+
+### 6. 修正 Discriminator 更新频率
+
+**问题**: Discriminator 在每个 SAC epoch 内都更新一次（共 8 次），但论文要求每个训练步只更新 1 次。
+
+**论文 Table I & II**:
+| 组件 | Updates per step |
+|------|------------------|
+| SAC (Critic, Actor, Alpha) | 8 |
+| AMP Discriminator | 1 |
+
+**修复**: 将 Discriminator 更新移到循环外部：
+```python
+# 循环内: SAC 更新 8 次
+for _ in range(self.updates_per_step):
+    # Critic, Actor, Alpha, Target network 更新
+    
+# 循环外: Discriminator 只更新 1 次
+# Update AMP Discriminator (1 epoch per step)
+```
+
+**文件**: `rsl_rl/rsl_rl/algorithms/amp_sac.py`
+
