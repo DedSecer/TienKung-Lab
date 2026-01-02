@@ -257,3 +257,19 @@ robot: RobotCfg = RobotCfg(
 **文件**: 
 - `legged_lab/envs/tienkung/sac_amp_walk_cfg.py`
 - `legged_lab/envs/tienkung/sac_amp_run_cfg.py`
+
+---
+
+## 2026-01-02 (Update 4)
+
+### 10. 调整 AMP 奖励系数与权重
+
+**问题**: SAC 算法默认参数较为激进，导致训练初期摔倒频繁。为提升稳定性并平衡模仿与任务性能，做如下调整：
+
+**调整内容**:
+- `amp_reward_coef`: 从 **2.0** 调整为 **1.0** (降低 AMP 信号强度)。
+- `amp_task_reward_lerp`: 从 **0.4** 调整为 **0.6** (增加 Task 奖励权重，更关注不摔倒和速度跟踪)。
+
+**文件**:
+- `legged_lab/envs/tienkung/sac_amp_run_cfg.py`
+- `legged_lab/envs/tienkung/sac_amp_walk_cfg.py`
