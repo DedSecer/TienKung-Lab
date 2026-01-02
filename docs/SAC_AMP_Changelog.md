@@ -273,3 +273,35 @@ robot: RobotCfg = RobotCfg(
 **文件**:
 - `legged_lab/envs/tienkung/sac_amp_run_cfg.py`
 - `legged_lab/envs/tienkung/sac_amp_walk_cfg.py`
+
+---
+
+## 2026-01-02 (Update 5)
+
+### 11. 进一步调整 Walk 任务参数 (与 PPO 对齐)
+
+**问题**: Walk 任务需要更高的稳定性，进一步降低 AMP 对抗奖励的权重，增加任务奖励权重，使配置与 PPO 版本对齐。
+
+**调整内容**:
+- `amp_reward_coef`: 从 **1.0** 调整为 **0.3** (大幅降低 AMP 信号强度，与 PPO 保持一致)。
+- `amp_task_reward_lerp`: 从 **0.6** 调整为 **0.7** (进一步增加 Task 奖励权重)。
+- `lin_vel_x` (Action Range): 确认范围为 **(-0.6, 1.0)** 。
+
+**文件**:
+- `legged_lab/envs/tienkung/sac_amp_walk_cfg.py`
+
+---
+
+## 2026-01-02 (Update 6)
+
+### 12. 进一步调整 Run 任务参数 (与 PPO 对齐)
+
+**问题**: Run 任务同样采取与 Walk 任务一致的策略，降低 AMP 对抗奖励权重，增加任务奖励权重，以提升训练稳定性。
+
+**调整内容**:
+- `amp_reward_coef`: 从 **1.0** 调整为 **0.3**。
+- `amp_task_reward_lerp`: 从 **0.6** 调整为 **0.7**。
+*注意*: Run 任务的动作范围 (`lin_vel_x`) 保持 (-0.6, 1.5) 不变，以允许更快的奔跑速度。
+
+**文件**:
+- `legged_lab/envs/tienkung/sac_amp_run_cfg.py`

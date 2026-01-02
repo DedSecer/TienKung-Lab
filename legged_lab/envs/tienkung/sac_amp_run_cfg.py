@@ -385,9 +385,9 @@ class TienKungSACRunAgentCfg(RslRlOnPolicyRunnerCfg):
     load_checkpoint = "model_.*.pt"
 
     # AMP parameters (from paper Table II)
-    amp_reward_coef = 1.0  # Modified: from 2.0 to 1.0 for stability
+    amp_reward_coef = 0.3  # Modified: from 2.0 to 1.0 to 0.3 for stability (matching PPO settings)
     amp_motion_files = ["legged_lab/envs/tienkung/datasets/motion_amp_expert/run.txt"]
     amp_num_preload_transitions = 2_000_000  # Reduced from 2*10^7 to save memory (expert data loaded dynamically)
-    amp_task_reward_lerp = 0.6  # Modified: from 0.4 to 0.6 (Task weight increased)
+    amp_task_reward_lerp = 0.7  # Modified: from 0.4 to 0.6 to 0.7 (Task weight increased significantly)
     amp_discr_hidden_dims = [1024, 512]  # Discriminator hidden dims (paper)
     min_normalized_std = [0.01, 0.01, 0.01] + [0.01] * 17  # Minimum normalized std (paper: [0.01, 0.01, 0.01])
