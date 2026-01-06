@@ -28,6 +28,8 @@ from legged_lab.envs.tienkung.walk_cfg import (
     TienKungWalkAgentCfg,
     TienKungWalkFlatEnvCfg,
 )
+# Pure PPO configuration (without AMP)
+from legged_lab.envs.tienkung.ppo_walk_cfg import TienKungPPOWalkAgentCfg
 from legged_lab.envs.tienkung.walk_with_sensor_cfg import (
     TienKungWalkWithSensorAgentCfg,
     TienKungWalkWithSensorFlatEnvCfg,
@@ -45,6 +47,8 @@ from legged_lab.utils.task_registry import task_registry
 
 # Register PPO-based tasks
 task_registry.register("walk", TienKungEnv, TienKungWalkFlatEnvCfg(), TienKungWalkAgentCfg())
+# Register Pure PPO task (without AMP) 
+task_registry.register("ppo_walk", TienKungEnv, TienKungWalkFlatEnvCfg(), TienKungPPOWalkAgentCfg())
 task_registry.register("run", TienKungEnv, TienKungRunFlatEnvCfg(), TienKungRunAgentCfg())
 task_registry.register(
     "walk_with_sensor", TienKungEnv, TienKungWalkWithSensorFlatEnvCfg(), TienKungWalkWithSensorAgentCfg()
