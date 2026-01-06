@@ -116,6 +116,15 @@ class AmpOffPolicyRunner:
 
         # Initialize SAC algorithm
         alg_class = eval(self.alg_cfg.pop("class_name"))
+
+        # Scale updates_per_step by num_steps_per_env to ensure we perform enough updates per iteration
+        # The config specifies updates per SINGLE env step, but we run updates once per ITERATION (which has multiple steps)
+        if "updates_per_step" in self.alg_cfg and "num_steps_per_env" in self.cfg:
+            original_updates = self.alg_cfg["updates_per_step"]
+            total_updates = int(original_updates * self.cfg["num_steps_per_env"])
+            self.alg_cfg["updates_per_step"] = total_updates
+            print(f"[INFO] Auto-scaled updates_per_step from {original_updates} to {total_updates} (x{self.cfg['num_steps_per_env']} steps)")
+
         self.alg: AMPSAC = alg_class(
             policy,
             discriminator,
