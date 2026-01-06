@@ -7,4 +7,5 @@ run_bash.sh
 wandb
 MUJOCO_LOG.TXT
 .history
+sense
 .venv
