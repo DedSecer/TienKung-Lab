@@ -1613,9 +1613,6 @@ def main():
     env_cfg.scene.num_envs = args_cli.num_envs
     env_cfg.scene.env_spacing = 2.5
     env_cfg.commands.rel_standing_envs = 0.0
-    env_cfg.commands.ranges.lin_vel_x = (0.8, 0.8)  # Forward velocity
-    env_cfg.commands.ranges.lin_vel_y = (0.0, 0.0)
-    env_cfg.commands.ranges.ang_vel_z = (0.0, 0.0)
 
     # set terrain to USD or default warehouse
     if args_cli.usd_path is not None:
