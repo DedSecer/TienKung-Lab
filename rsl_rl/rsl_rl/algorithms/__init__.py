@@ -22,5 +22,6 @@ from .amp_ppo import AMPPPO
 from .amp_sac import AMPSAC
 from .distillation import Distillation
 from .ppo import PPO
+from .sac import SAC
 
-__all__ = ["PPO", "Distillation", "AMPPPO", "AMPSAC"]
+__all__ = ["PPO", "SAC", "Distillation", "AMPPPO", "AMPSAC"]

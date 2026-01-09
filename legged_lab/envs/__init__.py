@@ -43,6 +43,11 @@ from legged_lab.envs.tienkung.sac_amp_run_cfg import (
     TienKungSACRunAgentCfg,
     TienKungSACRunFlatEnvCfg,
 )
+# Pure SAC configuration (without AMP)
+from legged_lab.envs.tienkung.sac_walk_cfg import (
+    TienKungSACWalkAgentCfg as TienKungPureSACWalkAgentCfg,
+    TienKungSACWalkFlatEnvCfg as TienKungPureSACWalkFlatEnvCfg,
+)
 from legged_lab.utils.task_registry import task_registry
 
 # Register PPO-based tasks
@@ -61,3 +66,5 @@ task_registry.register(
 task_registry.register("sac_amp_walk", TienKungEnv, TienKungSACWalkFlatEnvCfg(), TienKungSACWalkAgentCfg())
 task_registry.register("sac_amp_run", TienKungEnv, TienKungSACRunFlatEnvCfg(), TienKungSACRunAgentCfg())
 
+# Register Pure SAC tasks (without AMP, standard off-policy RL)
+task_registry.register("sac_walk", TienKungEnv, TienKungPureSACWalkFlatEnvCfg(), TienKungPureSACWalkAgentCfg())

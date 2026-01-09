@@ -20,6 +20,7 @@
 
 from .amp_off_policy_runner import AmpOffPolicyRunner
 from .amp_on_policy_runner import AmpOnPolicyRunner
+from .off_policy_runner import OffPolicyRunner
 from .on_policy_runner import OnPolicyRunner
 
-__all__ = ["OnPolicyRunner", "AmpOnPolicyRunner", "AmpOffPolicyRunner"]
+__all__ = ["OnPolicyRunner", "OffPolicyRunner", "AmpOnPolicyRunner", "AmpOffPolicyRunner"]
