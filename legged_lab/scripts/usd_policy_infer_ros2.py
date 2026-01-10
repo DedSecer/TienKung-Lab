@@ -1237,19 +1237,20 @@ def create_rtx_lidar_on_robot(stage, robot_prim_path: str, lidar_name: str = "mi
     
     lidar_path = f"{parent_path}/{lidar_name}"
     
-    # Custom sensor attributes for Solid State LiDAR (Example_Solid_State configuration)
+    # Custom sensor attributes for Solid State LiDAR (Optimized for humanoid robot head-mounted)
     # Solid-state LiDARs don't have rotating parts and complete full scan in single frame
+    # Parameters optimized for SLAM and navigation with head-mounted position (~1.5m height)
     sensor_attributes = {
         'omni:sensor:Core:scanType': "solidState",
         'omni:sensor:Core:intensityProcessing': "NORMALIZATION",
         'omni:sensor:Core:rayType': "IDEALIZED",
-        'omni:sensor:Core:nearRangeM': 0.05,
-        'omni:sensor:Core:farRangeM': 200.0,
+        'omni:sensor:Core:nearRangeM': 0.1,           # Slightly increased to avoid self-occlusion
+        'omni:sensor:Core:farRangeM': 30.0,           # 30m sufficient for indoor/outdoor navigation
         'omni:sensor:Core:rangeResolutionM': 0.004,
         'omni:sensor:Core:rangeAccuracyM': 0.02,
         'omni:sensor:Core:avgPowerW': 0.002,
         'omni:sensor:Core:minReflectance': 0.1,
-        'omni:sensor:Core:minReflectanceRange': 120.0,
+        'omni:sensor:Core:minReflectanceRange': 30.0, # Match farRangeM
         'omni:sensor:Core:wavelengthNm': 905.0,
         'omni:sensor:Core:pulseTimeNs': 6,
         'omni:sensor:Core:azimuthErrorMean': 0.0,
@@ -1258,12 +1259,12 @@ def create_rtx_lidar_on_robot(stage, robot_prim_path: str, lidar_name: str = "mi
         'omni:sensor:Core:elevationErrorStd': 0.015,
         'omni:sensor:Core:maxReturns': 2,
         'omni:sensor:Core:reportRateBaseHz': 10.0,
-        'omni:sensor:Core:numberOfEmitters': 128,
-        'omni:sensor:Core:numLines': 128,
-        'omni:sensor:Core:startAzimuthDeg': -100.0,
-        'omni:sensor:Core:endAzimuthDeg': 100.0,
-        'omni:sensor:Core:upElevationDeg': 20.0,
-        'omni:sensor:Core:downElevationDeg': -20.0,
+        'omni:sensor:Core:numberOfEmitters': 64,      # Reduced for better performance
+        'omni:sensor:Core:numLines': 64,              # Match numberOfEmitters
+        'omni:sensor:Core:startAzimuthDeg': -120.0,   # 240° horizontal FOV
+        'omni:sensor:Core:endAzimuthDeg': 120.0,
+        'omni:sensor:Core:upElevationDeg': 10.0,      # Less upward view needed
+        'omni:sensor:Core:downElevationDeg': -90.0,   # Critical: see ground obstacles at 1m distance
         'omni:sensor:Core:intensityMappingType': "LINEAR",
     }
     
