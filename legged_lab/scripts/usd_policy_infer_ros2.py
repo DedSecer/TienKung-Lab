@@ -90,7 +90,7 @@ parser.add_argument("--enable_cmd_vel", action="store_true", help="Enable ROS2 c
 parser.add_argument("--cmd_vel_topic", type=str, default="/cmd_vel", help="ROS2 topic name for velocity commands (geometry_msgs/Twist).")
 parser.add_argument("--max_lin_vel_x", type=float, default=1.0, help="Maximum linear velocity in x direction (m/s).")
 parser.add_argument("--max_lin_vel_y", type=float, default=0.5, help="Maximum linear velocity in y direction (m/s).")
-parser.add_argument("--max_ang_vel_z", type=float, default=1.0, help="Maximum angular velocity around z axis (rad/s).")
+parser.add_argument("--max_ang_vel_z", type=float, default=1.57, help="Maximum angular velocity around z axis (rad/s).")
 # High-frequency IMU publisher configuration
 parser.add_argument("--enable_high_freq_imu", action=argparse.BooleanOptionalAction, default=True, help="Enable high-frequency IMU publisher (enabled by default, use --no-enable_high_freq_imu to disable).")
 parser.add_argument("--imu_topic", type=str, default="/imu/data", help="ROS2 topic name for high-frequency IMU data.")
@@ -1237,47 +1237,34 @@ def create_rtx_lidar_on_robot(stage, robot_prim_path: str, lidar_name: str = "mi
     
     lidar_path = f"{parent_path}/{lidar_name}"
     
-    # Custom sensor attributes for Mid-360 like LiDAR
+    # Custom sensor attributes for Solid State LiDAR (Example_Solid_State configuration)
+    # Solid-state LiDARs don't have rotating parts and complete full scan in single frame
     sensor_attributes = {
-        'omni:sensor:Core:scanType': "ROTARY",
+        'omni:sensor:Core:scanType': "solidState",
         'omni:sensor:Core:intensityProcessing': "NORMALIZATION",
-        'omni:sensor:Core:rotationDirection': "CW",
         'omni:sensor:Core:rayType': "IDEALIZED",
-        'omni:sensor:Core:nearRangeM': 0.1,
-        'omni:sensor:Core:farRangeM': 40.0,
+        'omni:sensor:Core:nearRangeM': 0.05,
+        'omni:sensor:Core:farRangeM': 200.0,
         'omni:sensor:Core:rangeResolutionM': 0.004,
-        'omni:sensor:Core:rangeAccuracyM': 0.025,
+        'omni:sensor:Core:rangeAccuracyM': 0.02,
         'omni:sensor:Core:avgPowerW': 0.002,
         'omni:sensor:Core:minReflectance': 0.1,
-        'omni:sensor:Core:minReflectanceRange': 70.0,
+        'omni:sensor:Core:minReflectanceRange': 120.0,
         'omni:sensor:Core:wavelengthNm': 905.0,
         'omni:sensor:Core:pulseTimeNs': 6,
-        'omni:sensor:Core:azimuthErrorMean': 0.1,
-        'omni:sensor:Core:azimuthErrorStd': 0.5,
-        'omni:sensor:Core:elevationErrorMean': 0.1,
-        'omni:sensor:Core:elevationErrorStd': 0.5,
+        'omni:sensor:Core:azimuthErrorMean': 0.0,
+        'omni:sensor:Core:azimuthErrorStd': 0.015,
+        'omni:sensor:Core:elevationErrorMean': 0.0,
+        'omni:sensor:Core:elevationErrorStd': 0.015,
         'omni:sensor:Core:maxReturns': 2,
-        'omni:sensor:Core:scanRateBaseHz': 40.0,
-        'omni:sensor:Core:reportRateBaseHz': 7761,
-        'omni:sensor:Core:numberOfEmitters': 40,
-        'omni:sensor:Core:numberOfChannels': 40,
-        'omni:sensor:Core:rangeOffset': 0.03,
+        'omni:sensor:Core:reportRateBaseHz': 10.0,
+        'omni:sensor:Core:numberOfEmitters': 128,
+        'omni:sensor:Core:numLines': 128,
+        'omni:sensor:Core:startAzimuthDeg': -100.0,
+        'omni:sensor:Core:endAzimuthDeg': 100.0,
+        'omni:sensor:Core:upElevationDeg': 20.0,
+        'omni:sensor:Core:downElevationDeg': -20.0,
         'omni:sensor:Core:intensityMappingType': "LINEAR",
-        'omni:sensor:Core:emitterState:s001:azimuthDeg': [0] * 40,
-        'omni:sensor:Core:emitterState:s001:elevationDeg': [
-            -7.0, -5.525, -4.050, -2.575, -1.1004, 0.374, 1.849, 3.324, 4.799, 6.274,
-            7.7494, 9.2249, 10.699, 12.174, 13.645, 15.1243, 16.5999, 18.074, 19.5499, 21.024,
-            22.493, 23.9749, 25.44, 26.924, 28.39, 29.8743, 31.3499, 32.824, 34.29, 35.774,
-            37.2486, 38.724, 40.19, 41.674, 43.14, 44.624, 46.09, 47.574, 49.048, 50.524
-        ],
-        'omni:sensor:Core:emitterState:s001:fireTimeNs': [i * 1000 for i in range(40)],
-        'omni:sensor:Core:emitterState:s001:distanceCorrectionM': [0.0] * 40,
-        'omni:sensor:Core:emitterState:s001:focalDistM': [0.0] * 40,
-        'omni:sensor:Core:emitterState:s001:focalSlope': [0.0] * 40,
-        'omni:sensor:Core:emitterState:s001:horOffsetM': [0.0] * 40,
-        'omni:sensor:Core:emitterState:s001:reportRateDiv': [0.0] * 40,
-        'omni:sensor:Core:emitterState:s001:vertOffsetM': [0.0] * 40,
-        'omni:sensor:Core:emitterState:s001:channelId': list(range(1, 41)),
     }
     
     # Calculate orientation from local rotation (Euler angles to quaternion)
@@ -1305,7 +1292,7 @@ def create_rtx_lidar_on_robot(stage, robot_prim_path: str, lidar_name: str = "mi
             "IsaacSensorCreateRtxLidar",
             path=lidar_name,
             parent=parent_path,
-            config="Example_Rotary",  # Valid default rotating LiDAR config for Isaac Sim 4.5
+            config="Example_Solid_State",  # Solid-state LiDAR config for Isaac Sim 4.5
             translation=Gf.Vec3d(local_position[0], local_position[1], local_position[2]),
             orientation=Gf.Quatd(qw, qx, qy, qz),
         )
