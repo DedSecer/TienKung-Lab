@@ -97,7 +97,7 @@ parser.add_argument("--imu_topic", type=str, default="/imu/data", help="ROS2 top
 parser.add_argument("--imu_frame_id", type=str, default="imu_link", help="Frame ID for IMU messages.")
 parser.add_argument("--imu_publish_rate", type=float, default=60.0, help="IMU publish rate in Hz (default: 60Hz).")
 # Odom TF publisher configuration
-parser.add_argument("--enable_odom_tf", action=argparse.BooleanOptionalAction, default=True, help="Enable odom->base_link TF publisher (enabled by default, use --no-enable_odom_tf to disable).")
+parser.add_argument("--enable_odom_tf", action=argparse.BooleanOptionalAction, default=False, help="Enable odom->base_link TF publisher (disabled by default, use --enable_odom_tf to enable).")
 parser.add_argument("--odom_tf_topic", type=str, default="/tf", help="ROS2 topic name for odom TF (geometry_msgs/TransformStamped).")
 parser.add_argument("--odom_frame_id", type=str, default="odom", help="Frame ID for odom frame.")
 parser.add_argument("--base_frame_id", type=str, default="base_link", help="Frame ID for robot base frame.")
