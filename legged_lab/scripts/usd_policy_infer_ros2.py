@@ -91,13 +91,15 @@ parser.add_argument("--cmd_vel_topic", type=str, default="/cmd_vel", help="ROS2 
 parser.add_argument("--max_lin_vel_x", type=float, default=1.0, help="Maximum linear velocity in x direction (m/s).")
 parser.add_argument("--max_lin_vel_y", type=float, default=0.5, help="Maximum linear velocity in y direction (m/s).")
 parser.add_argument("--max_ang_vel_z", type=float, default=1.57, help="Maximum angular velocity around z axis (rad/s).")
+parser.add_argument("--lin_vel_gain", type=float, default=1.0, help="Gain multiplier for linear velocity commands (default: 1.0). Increase for more responsive movement.")
+parser.add_argument("--ang_vel_gain", type=float, default=1.0, help="Gain multiplier for angular velocity commands (default: 1.0). Increase for fuller turns.")
 # High-frequency IMU publisher configuration
 parser.add_argument("--enable_high_freq_imu", action=argparse.BooleanOptionalAction, default=True, help="Enable high-frequency IMU publisher (enabled by default, use --no-enable_high_freq_imu to disable).")
 parser.add_argument("--imu_topic", type=str, default="/imu/data", help="ROS2 topic name for high-frequency IMU data.")
 parser.add_argument("--imu_frame_id", type=str, default="imu_link", help="Frame ID for IMU messages.")
 parser.add_argument("--imu_publish_rate", type=float, default=60.0, help="IMU publish rate in Hz (default: 60Hz).")
 # Odom TF publisher configuration
-parser.add_argument("--enable_odom_tf", action=argparse.BooleanOptionalAction, default=False, help="Enable odom->base_link TF publisher (disabled by default, use --enable_odom_tf to enable).")
+parser.add_argument("--enable_odom_tf", action=argparse.BooleanOptionalAction, default=True, help="Enable odom->base_link TF publisher (disabled by default, use --enable_odom_tf to enable).")
 parser.add_argument("--odom_tf_topic", type=str, default="/tf", help="ROS2 topic name for odom TF (geometry_msgs/TransformStamped).")
 parser.add_argument("--odom_frame_id", type=str, default="odom", help="Frame ID for odom frame.")
 parser.add_argument("--base_frame_id", type=str, default="base_link", help="Frame ID for robot base frame.")
@@ -1841,6 +1843,23 @@ def main():
                 if cmd_vel_subscriber is not None:
                     lin_vel_x, lin_vel_y, ang_vel_z = cmd_vel_subscriber.get_velocity_command()
                     
+                    # Apply gains to improve responsiveness for Nav2
+                    # Nav2 often outputs small velocities that RL policies might ignore
+                    lin_vel_x *= args_cli.lin_vel_gain
+                    lin_vel_y *= args_cli.lin_vel_gain
+                    ang_vel_z *= args_cli.ang_vel_gain
+
+                    # Simple deadzone to avoid drift
+                    if abs(lin_vel_x) < 0.01: lin_vel_x = 0.0
+                    if abs(lin_vel_y) < 0.01: lin_vel_y = 0.0
+                    if abs(ang_vel_z) < 0.01: ang_vel_z = 0.0
+                    
+                    # Trick: Some policies struggle to turn in place without forward motion.
+                    # If we have rotation but no linear velocity, inject a tiny forward surge
+                    # to "wake up" the stepping controller.
+                    if abs(ang_vel_z) > 0.05 and abs(lin_vel_x) < 0.01 and abs(lin_vel_y) < 0.01:
+                        lin_vel_x = 0.001
+
                     # Update the command generator's command tensor
                     # command tensor shape: (num_envs, 3) where [lin_vel_x, lin_vel_y, ang_vel_z]
                     env.command_generator.command[:, 0] = lin_vel_x
