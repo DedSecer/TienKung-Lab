@@ -38,20 +38,26 @@ Usage:
     # Run with custom camera topic names
     python legged_lab/scripts/usd_policy_infer_ros2.py --task walk --policy_path /path/to/policy.pt --rgb_topic /camera/rgb --depth_topic /camera/depth
 
-    # Run with RTX LiDAR enabled
-    python legged_lab/scripts/usd_policy_infer_ros2.py --task walk --policy_path /path/to/policy.pt --enable_lidar --lidar_topic /point_cloud
+    # Run with RTX LiDAR disabled (LiDAR is enabled by default)
+    python legged_lab/scripts/usd_policy_infer_ros2.py --task walk --policy_path /path/to/policy.pt --no-enable_lidar
 
     # Run with cmd_vel subscriber enabled for velocity control
     python legged_lab/scripts/usd_policy_infer_ros2.py --task walk --policy_path /path/to/policy.pt --enable_cmd_vel --cmd_vel_topic /cmd_vel
 
-ROS2 Topics Published:
+    # Run with minimal ROS2 features (disable IMU, clock, odom TF, LiDAR)
+    python legged_lab/scripts/usd_policy_infer_ros2.py --task walk --policy_path /path/to/policy.pt --no-enable_lidar --no-enable_high_freq_imu --no-enable_clock --no-enable_odom_tf
+
+ROS2 Topics Published (by default):
     - /rgb (sensor_msgs/Image): RGB camera image
     - /depth (sensor_msgs/Image): Depth camera image
     - /camera_info (sensor_msgs/CameraInfo): Camera intrinsic parameters
-    - /point_cloud (sensor_msgs/PointCloud2): RTX LiDAR point cloud data (when --enable_lidar is set)
+    - /point_cloud (sensor_msgs/PointCloud2): RTX LiDAR point cloud data (enabled by default, use --no-enable_lidar to disable)
+    - /imu/data (sensor_msgs/Imu): High-frequency IMU data (enabled by default, use --no-enable_high_freq_imu to disable)
+    - /clock (rosgraph_msgs/Clock): Simulation clock (enabled by default, use --no-enable_clock to disable)
+    - /tf (tf2_msgs/TFMessage): odom->base_link transform (enabled by default, use --no-enable_odom_tf to disable)
 
 ROS2 Topics Subscribed:
-    - /cmd_vel (geometry_msgs/Twist): Velocity commands for robot control (when --enable_cmd_vel is set)
+    - /cmd_vel (geometry_msgs/Twist): Velocity commands for robot control (disabled by default, use --enable_cmd_vel to enable)
         - linear.x: Forward/backward velocity (m/s)
         - linear.y: Left/right velocity (m/s)
         - angular.z: Rotation velocity (rad/s)
@@ -99,7 +105,7 @@ parser.add_argument("--imu_topic", type=str, default="/imu/data", help="ROS2 top
 parser.add_argument("--imu_frame_id", type=str, default="imu_link", help="Frame ID for IMU messages.")
 parser.add_argument("--imu_publish_rate", type=float, default=60.0, help="IMU publish rate in Hz (default: 60Hz).")
 # Odom TF publisher configuration
-parser.add_argument("--enable_odom_tf", action=argparse.BooleanOptionalAction, default=True, help="Enable odom->base_link TF publisher (disabled by default, use --enable_odom_tf to enable).")
+parser.add_argument("--enable_odom_tf", action=argparse.BooleanOptionalAction, default=True, help="Enable odom->base_link TF publisher (enabled by default, use --no-enable_odom_tf to disable).")
 parser.add_argument("--odom_tf_topic", type=str, default="/tf", help="ROS2 topic name for odom TF (geometry_msgs/TransformStamped).")
 parser.add_argument("--odom_frame_id", type=str, default="odom", help="Frame ID for odom frame.")
 parser.add_argument("--base_frame_id", type=str, default="base_link", help="Frame ID for robot base frame.")
@@ -198,7 +204,6 @@ class CmdVelSubscriber:
         self._lock = threading.Lock()
         
         # Set ROS_DOMAIN_ID if not already set
-        import os
         os.environ.setdefault('ROS_DOMAIN_ID', str(domain_id))
         
         # Initialize rclpy if not already initialized
@@ -262,8 +267,9 @@ class CmdVelSubscriber:
         """Destructor to ensure cleanup."""
         try:
             self.shutdown()
-        except:
+        except Exception:
             pass
+
 
 class HighFreqImuPublisher:
     """
@@ -318,7 +324,6 @@ class HighFreqImuPublisher:
         self._prev_sim_time = 0.0  # Use simulation time for differentiation
         
         # Set ROS_DOMAIN_ID if not already set
-        import os
         os.environ.setdefault('ROS_DOMAIN_ID', str(domain_id))
         
         # Initialize rclpy if not already initialized
@@ -475,7 +480,7 @@ class HighFreqImuPublisher:
         """Destructor to ensure cleanup."""
         try:
             self.shutdown()
-        except:
+        except Exception:
             pass
 
 
@@ -524,7 +529,6 @@ class HighFreqLidarPublisher:
         self._last_published_sim_time = -1.0
         
         # Set ROS_DOMAIN_ID if not already set
-        import os
         os.environ.setdefault('ROS_DOMAIN_ID', str(domain_id))
         
         # Initialize rclpy if not already initialized
@@ -691,7 +695,7 @@ class HighFreqLidarPublisher:
         """Destructor to ensure cleanup."""
         try:
             self.shutdown()
-        except:
+        except Exception:
             pass
 
 
@@ -732,7 +736,6 @@ class ClockPublisher:
         self._last_published_sim_time = -1.0
         
         # Set ROS_DOMAIN_ID if not already set
-        import os
         os.environ.setdefault('ROS_DOMAIN_ID', str(domain_id))
         
         # Initialize rclpy if not already initialized
@@ -883,11 +886,9 @@ class OdomTFPublisher:
         
         # Initial pose offset (to make odom start at origin)
         self._initial_position = None
-        self._initial_orientation = None
-        self._initial_yaw = None
+        self._initial_orientation_inv = None  # Inverse of initial orientation for proper 3D transform
         
         # Set ROS_DOMAIN_ID if not already set
-        import os
         os.environ.setdefault('ROS_DOMAIN_ID', str(domain_id))
         
         # Initialize rclpy if not already initialized
@@ -917,6 +918,35 @@ class OdomTFPublisher:
         print(f"[INFO] Publishing TF: {odom_frame_id} -> {base_frame_id}")
         print(f"[INFO] Publish rate: {publish_rate} Hz")
     
+    @staticmethod
+    def _quat_conjugate(q):
+        """Compute quaternion conjugate (inverse for unit quaternion). Input/output: (w, x, y, z)."""
+        return np.array([q[0], -q[1], -q[2], -q[3]])
+    
+    @staticmethod
+    def _quat_multiply(q1, q2):
+        """Multiply two quaternions. Input/output: (w, x, y, z)."""
+        w1, x1, y1, z1 = q1
+        w2, x2, y2, z2 = q2
+        return np.array([
+            w1*w2 - x1*x2 - y1*y2 - z1*z2,
+            w1*x2 + x1*w2 + y1*z2 - z1*y2,
+            w1*y2 - x1*z2 + y1*w2 + z1*x2,
+            w1*z2 + x1*y2 - y1*x2 + z1*w2
+        ])
+    
+    @staticmethod
+    def _quat_rotate_vector(q, v):
+        """Rotate vector v by quaternion q. q: (w, x, y, z), v: (x, y, z)."""
+        # Convert vector to quaternion form (0, x, y, z)
+        v_quat = np.array([0.0, v[0], v[1], v[2]])
+        q_conj = OdomTFPublisher._quat_conjugate(q)
+        # Rotated vector = q * v * q^-1
+        result = OdomTFPublisher._quat_multiply(
+            OdomTFPublisher._quat_multiply(q, v_quat), q_conj
+        )
+        return result[1:4]  # Return (x, y, z) part
+
     def update_robot_pose(self, position: np.ndarray, orientation: np.ndarray,
                           sim_time: float = None):
         """
@@ -938,45 +968,33 @@ class OdomTFPublisher:
             if not isinstance(position, np.ndarray):
                 position = position.cpu().numpy().flatten()
             
-            # Convert orientation to numpy
+            # Convert orientation to numpy (w, x, y, z)
             if not isinstance(orientation, np.ndarray):
                 orientation = orientation.cpu().numpy().flatten()
             
             # Set initial pose on first update (to make odom start at origin)
             if self._initial_position is None:
                 self._initial_position = position.copy()
-                # Store initial orientation for yaw offset
-                # Isaac Sim uses (w, x, y, z), convert to (x, y, z, w) for calculations
-                quat_wxyz = orientation
-                # Calculate initial yaw from quaternion
-                w, x, y, z = quat_wxyz[0], quat_wxyz[1], quat_wxyz[2], quat_wxyz[3]
-                self._initial_yaw = np.arctan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
-                self._initial_orientation = orientation.copy()
-                print(f"[INFO] OdomTFPublisher: Initial pose set at position {self._initial_position}, yaw {np.degrees(self._initial_yaw):.1f} deg")
+                # Store inverse of initial orientation for proper 3D transform
+                self._initial_orientation_inv = self._quat_conjugate(orientation)
+                print(f"[INFO] OdomTFPublisher: Initial pose set at position {self._initial_position}")
             
-            # Compute relative position from initial
-            rel_position = position - self._initial_position
+            # Compute relative position from initial position
+            rel_position_world = position - self._initial_position
             
-            # Rotate relative position by negative initial yaw to align with odom frame
-            cos_yaw = np.cos(-self._initial_yaw)
-            sin_yaw = np.sin(-self._initial_yaw)
-            self._position[0] = rel_position[0] * cos_yaw - rel_position[1] * sin_yaw
-            self._position[1] = rel_position[0] * sin_yaw + rel_position[1] * cos_yaw
-            self._position[2] = rel_position[2]
+            # Rotate relative position into odom frame using inverse of initial orientation
+            # This properly handles full 3D rotation, not just yaw
+            self._position = self._quat_rotate_vector(self._initial_orientation_inv, rel_position_world)
             
-            # Convert orientation from Isaac Sim (w, x, y, z) to ROS (x, y, z, w)
-            # and compute relative orientation from initial
-            # For simplicity, we compute relative yaw and create new quaternion
-            w, x, y, z = orientation[0], orientation[1], orientation[2], orientation[3]
-            current_yaw = np.arctan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
-            rel_yaw = current_yaw - self._initial_yaw
+            # Compute relative orientation: q_rel = q_init^-1 * q_current
+            # This gives the rotation from initial orientation to current orientation
+            rel_orientation_wxyz = self._quat_multiply(self._initial_orientation_inv, orientation)
             
-            # Create quaternion from relative yaw (assuming mostly 2D motion)
-            # For full 3D, we would need proper quaternion multiplication
-            self._orientation[0] = orientation[1]  # x
-            self._orientation[1] = orientation[2]  # y
-            self._orientation[2] = np.sin(rel_yaw / 2.0)  # z (simplified for 2D)
-            self._orientation[3] = np.cos(rel_yaw / 2.0)  # w (simplified for 2D)
+            # Convert from Isaac Sim (w, x, y, z) to ROS (x, y, z, w)
+            self._orientation[0] = rel_orientation_wxyz[1]  # x
+            self._orientation[1] = rel_orientation_wxyz[2]  # y
+            self._orientation[2] = rel_orientation_wxyz[3]  # z
+            self._orientation[3] = rel_orientation_wxyz[0]  # w
     
     def _publish_thread(self):
         """Thread function to publish odom TF at specified frequency."""
@@ -1047,7 +1065,7 @@ class OdomTFPublisher:
         """Destructor to ensure cleanup."""
         try:
             self.shutdown()
-        except:
+        except Exception:
             pass
 
 
@@ -1242,11 +1260,12 @@ def create_rtx_lidar_on_robot(stage, robot_prim_path: str, lidar_name: str = "mi
     # Custom sensor attributes for Solid State LiDAR (Optimized for humanoid robot head-mounted)
     # Solid-state LiDARs don't have rotating parts and complete full scan in single frame
     # Parameters optimized for SLAM and navigation with head-mounted position (~1.5m height)
+    # NOTE: Some attributes may not be modifiable after LiDAR creation - consider using a custom config file
     sensor_attributes = {
         'omni:sensor:Core:scanType': "solidState",
         'omni:sensor:Core:intensityProcessing': "NORMALIZATION",
         'omni:sensor:Core:rayType': "IDEALIZED",
-        'omni:sensor:Core:nearRangeM': 0.1,           # Slightly increased to avoid self-occlusion
+        'omni:sensor:Core:nearRangeM': 0.3,           # Increased to 0.3m to avoid scanning robot body
         'omni:sensor:Core:farRangeM': 30.0,           # 30m sufficient for indoor/outdoor navigation
         'omni:sensor:Core:rangeResolutionM': 0.004,
         'omni:sensor:Core:rangeAccuracyM': 0.02,
@@ -1255,18 +1274,19 @@ def create_rtx_lidar_on_robot(stage, robot_prim_path: str, lidar_name: str = "mi
         'omni:sensor:Core:minReflectanceRange': 30.0, # Match farRangeM
         'omni:sensor:Core:wavelengthNm': 905.0,
         'omni:sensor:Core:pulseTimeNs': 6,
+        # Removed error parameters to get cleaner point cloud (set to 0 for ideal sensor)
         'omni:sensor:Core:azimuthErrorMean': 0.0,
-        'omni:sensor:Core:azimuthErrorStd': 0.015,
+        'omni:sensor:Core:azimuthErrorStd': 0.0,      # No azimuth noise
         'omni:sensor:Core:elevationErrorMean': 0.0,
-        'omni:sensor:Core:elevationErrorStd': 0.015,
-        'omni:sensor:Core:maxReturns': 2,
+        'omni:sensor:Core:elevationErrorStd': 0.0,    # No elevation noise
+        'omni:sensor:Core:maxReturns': 1,             # Single return to reduce noise
         'omni:sensor:Core:reportRateBaseHz': 10.0,
         'omni:sensor:Core:numberOfEmitters': 64,      # Reduced for better performance
         'omni:sensor:Core:numLines': 64,              # Match numberOfEmitters
         'omni:sensor:Core:startAzimuthDeg': -120.0,   # 240° horizontal FOV
         'omni:sensor:Core:endAzimuthDeg': 120.0,
         'omni:sensor:Core:upElevationDeg': 10.0,      # Less upward view needed
-        'omni:sensor:Core:downElevationDeg': -90.0,   # Critical: see ground obstacles at 1m distance
+        'omni:sensor:Core:downElevationDeg': -30.0,   # Reduced from -90° to avoid ground penetration noise
         'omni:sensor:Core:intensityMappingType': "LINEAR",
     }
     
@@ -1306,6 +1326,8 @@ def create_rtx_lidar_on_robot(stage, robot_prim_path: str, lidar_name: str = "mi
             # Apply custom sensor attributes
             lidar_prim = stage.GetPrimAtPath(lidar_path)
             if lidar_prim.IsValid():
+                applied_count = 0
+                invalid_attrs = []
                 for attr_name, attr_value in sensor_attributes.items():
                     # Skip array attributes that might not be supported directly
                     if isinstance(attr_value, list):
@@ -1314,8 +1336,17 @@ def create_rtx_lidar_on_robot(stage, robot_prim_path: str, lidar_name: str = "mi
                         attr = lidar_prim.GetAttribute(attr_name)
                         if attr.IsValid():
                             attr.Set(attr_value)
+                            applied_count += 1
+                        else:
+                            invalid_attrs.append(attr_name)
                     except Exception as e:
-                        print(f"[DEBUG] Could not set attribute {attr_name}: {e}")
+                        print(f"[WARN] Could not set attribute {attr_name}: {e}")
+                        invalid_attrs.append(attr_name)
+                
+                print(f"[INFO] Applied {applied_count}/{len(sensor_attributes)} custom LiDAR attributes")
+                if invalid_attrs:
+                    print(f"[WARN] Invalid/unsupported LiDAR attributes: {invalid_attrs}")
+                    print(f"[INFO] Note: Some attributes may require a custom LiDAR config file instead of runtime modification")
             
             return lidar_path
         else:
@@ -1584,259 +1615,259 @@ def setup_ros2_camera_graph(camera_prim_path: str, rgb_topic: str, depth_topic: 
 
 def main():
     """Main function."""
-    # load the trained jit policy
-    policy_path = os.path.abspath(args_cli.policy_path)
-    file_content = omni.client.read_file(policy_path)[2]
-    file = io.BytesIO(memoryview(file_content).tobytes())
-    device = "cuda:0" if torch.cuda.is_available() else "cpu"
-    policy = torch.jit.load(file, map_location=device)
-    print(f"[INFO] Loaded policy from: {policy_path}")
-
-    # get environment configuration
-    env_class_name = args_cli.task
-    env_cfg, agent_cfg = task_registry.get_cfgs(env_class_name)
-
-    # modify configuration for USD environment inference
-    env_cfg.noise.add_noise = False
-    env_cfg.domain_rand.events.push_robot = None
-    env_cfg.scene.max_episode_length_s = 1000.0  # Long episode for demo
-    env_cfg.scene.num_envs = args_cli.num_envs
-    env_cfg.scene.env_spacing = 2.5
-    env_cfg.commands.rel_standing_envs = 0.0
-
-    # set terrain to USD or default warehouse
-    if args_cli.usd_path is not None:
-        usd_path = os.path.abspath(args_cli.usd_path)
-        print(f"[INFO] Using custom USD environment: {usd_path}")
-    else:
-        usd_path = f"{ISAAC_NUCLEUS_DIR}/Environments/Simple_Warehouse/warehouse.usd"
-        print(f"[INFO] Using default warehouse USD environment: {usd_path}")
-
-    # override terrain configuration for USD environment
-    env_cfg.scene.terrain_type = "usd"
-    env_cfg.scene.terrain_generator = None
-    env_cfg.scene.usd_path = usd_path
-
-    # disable height scanner for USD environment (mesh not available)
-    env_cfg.scene.height_scanner.enable_height_scan = False
-
-    if args_cli.seed is not None:
-        env_cfg.scene.seed = args_cli.seed
-
-    # set device
-    env_cfg.device = device
-
-    # IMPORTANT: Remove robots from USD BEFORE creating environment
-    # This prevents PhysX from creating tensor views for prims that will be deleted
-    stage = Usd.Stage.Open(usd_path)
-    remove_usd_robots(stage)
-    # Save the modified USD to a temporary file
-    import tempfile
-    temp_usd = tempfile.NamedTemporaryFile(suffix=".usd", delete=False)
-    temp_usd_path = temp_usd.name
-    temp_usd.close()
-    stage.Export(temp_usd_path)
-    print(f"[INFO] Saved cleaned USD to temporary file: {temp_usd_path}")
+    # Track resources for cleanup
+    temp_usd_path = None
+    cmd_vel_subscriber = None
+    imu_publisher = None
+    odom_tf_publisher = None
+    clock_publisher = None
+    env = None
     
-    # Update config to use the cleaned USD
-    env_cfg.scene.usd_path = temp_usd_path
+    try:
+        # load the trained jit policy
+        policy_path = os.path.abspath(args_cli.policy_path)
+        file_content = omni.client.read_file(policy_path)[2]
+        file = io.BytesIO(memoryview(file_content).tobytes())
+        device = "cuda:0" if torch.cuda.is_available() else "cpu"
+        policy = torch.jit.load(file, map_location=device)
+        print(f"[INFO] Loaded policy from: {policy_path}")
 
-    # create environment
-    env_class = task_registry.get_task_class(env_class_name)
-    env = env_class(env_cfg, args_cli.headless)
-    print(f"[INFO] Created environment: {env_class_name}")
+        # get environment configuration
+        env_class_name = args_cli.task
+        env_cfg, agent_cfg = task_registry.get_cfgs(env_class_name)
 
-    # Get the current stage after environment creation
-    current_stage = omni.usd.get_context().get_stage()
-    
-    # Find the robot prim path - typically under /World/envs/env_0/Robot
-    robot_prim_path = "/World/envs/env_0/Robot"
-    robot_prim = current_stage.GetPrimAtPath(robot_prim_path)
-    
-    if not robot_prim.IsValid():
-        print(f"[WARN] Robot not found at {robot_prim_path}, searching for alternative paths...")
-        # Search for robot in stage
-        for prim in current_stage.Traverse():
-            if "Robot" in prim.GetPath().pathString and prim.IsA(UsdGeom.Xform):
-                robot_prim_path = prim.GetPath().pathString
-                print(f"[INFO] Found robot at: {robot_prim_path}")
-                break
-    
-    # Create camera on the robot
-    camera_path = create_camera_on_robot(
-        stage=current_stage,
-        robot_prim_path=robot_prim_path,
-        camera_name="head_camera",
-        local_position=(0.3, 0.0, 0.65),  # 前方 0.3m, 抬高 0.4m
-        local_rotation=(90.0, -90.0, 0.0),  # 绕 Y 轴旋转 90度，相机朝前
-        width=args_cli.camera_width,
-        height=args_cli.camera_height
-    )
-    
-    # Update simulation to initialize the camera
-    simulation_app.update()
-    
-    if camera_path:
-        # Setup ROS2 camera publishing graph
-        try:
-            ros2_graph = setup_ros2_camera_graph(
-                camera_prim_path=camera_path,
-                rgb_topic=args_cli.rgb_topic,
-                depth_topic=args_cli.depth_topic,
-                camera_info_topic=args_cli.camera_info_topic,
-                frame_id=args_cli.camera_frame_id,
-                domain_id=args_cli.ros2_domain_id
-            )
-            print("[INFO] ROS2 camera publishing enabled successfully!")
-            print(f"[INFO] Topics: {args_cli.rgb_topic}, {args_cli.depth_topic}, {args_cli.camera_info_topic}")
-            print(f"[INFO] To view topics, run: ros2 topic list")
-            print(f"[INFO] To view RGB image: ros2 run rqt_image_view rqt_image_view {args_cli.rgb_topic}")
-        except Exception as e:
-            print(f"[ERROR] Failed to setup ROS2 camera graph: {e}")
-            print("[WARN] Continuing without ROS2 camera publishing...")
-    else:
-        print("[WARN] Camera creation failed, skipping ROS2 camera publishing setup")
-    
-    # Create RTX LiDAR on the robot if enabled
-    if args_cli.enable_lidar:
-        lidar_path = create_rtx_lidar_on_robot(
+        # modify configuration for USD environment inference
+        env_cfg.noise.add_noise = False
+        env_cfg.domain_rand.events.push_robot = None
+        env_cfg.scene.max_episode_length_s = 1000.0  # Long episode for demo
+        env_cfg.scene.num_envs = args_cli.num_envs
+        env_cfg.scene.env_spacing = 2.5
+        env_cfg.commands.rel_standing_envs = 0.0
+
+        # set terrain to USD or default warehouse
+        if args_cli.usd_path is not None:
+            usd_path = os.path.abspath(args_cli.usd_path)
+            print(f"[INFO] Using custom USD environment: {usd_path}")
+        else:
+            usd_path = f"{ISAAC_NUCLEUS_DIR}/Environments/Simple_Warehouse/warehouse.usd"
+            print(f"[INFO] Using default warehouse USD environment: {usd_path}")
+
+        # override terrain configuration for USD environment
+        env_cfg.scene.terrain_type = "usd"
+        env_cfg.scene.terrain_generator = None
+        env_cfg.scene.usd_path = usd_path
+
+        # disable height scanner for USD environment (mesh not available)
+        env_cfg.scene.height_scanner.enable_height_scan = False
+
+        if args_cli.seed is not None:
+            env_cfg.scene.seed = args_cli.seed
+
+        # set device
+        env_cfg.device = device
+
+        # IMPORTANT: Remove robots from USD BEFORE creating environment
+        # This prevents PhysX from creating tensor views for prims that will be deleted
+        stage = Usd.Stage.Open(usd_path)
+        remove_usd_robots(stage)
+        # Save the modified USD to a temporary file
+        import tempfile
+        temp_usd = tempfile.NamedTemporaryFile(suffix=".usd", delete=False)
+        temp_usd_path = temp_usd.name
+        temp_usd.close()
+        stage.Export(temp_usd_path)
+        print(f"[INFO] Saved cleaned USD to temporary file: {temp_usd_path}")
+        
+        # Update config to use the cleaned USD
+        env_cfg.scene.usd_path = temp_usd_path
+
+        # create environment
+        env_class = task_registry.get_task_class(env_class_name)
+        env = env_class(env_cfg, args_cli.headless)
+        print(f"[INFO] Created environment: {env_class_name}")
+
+        # Get the current stage after environment creation
+        current_stage = omni.usd.get_context().get_stage()
+        
+        # Find the robot prim path - typically under /World/envs/env_0/Robot
+        robot_prim_path = "/World/envs/env_0/Robot"
+        robot_prim = current_stage.GetPrimAtPath(robot_prim_path)
+        
+        if not robot_prim.IsValid():
+            print(f"[WARN] Robot not found at {robot_prim_path}, searching for alternative paths...")
+            # Search for robot in stage
+            for prim in current_stage.Traverse():
+                if "Robot" in prim.GetPath().pathString and prim.IsA(UsdGeom.Xform):
+                    robot_prim_path = prim.GetPath().pathString
+                    print(f"[INFO] Found robot at: {robot_prim_path}")
+                    break
+        
+        # Create camera on the robot
+        camera_path = create_camera_on_robot(
             stage=current_stage,
             robot_prim_path=robot_prim_path,
-            lidar_name="mid360_lidar",
-            local_position=(0.0, 0.0, 0.8),  # 机器人 pelvis 上方 0.6m
-            local_rotation=(0.0, 0.0, 0.0),
+            camera_name="head_camera",
+            local_position=(0.3, 0.0, 0.65),  # 前方 0.3m, 抬高 0.4m
+            local_rotation=(90.0, -90.0, 0.0),  # 绕 Y 轴旋转 90度，相机朝前
+            width=args_cli.camera_width,
+            height=args_cli.camera_height
         )
         
-        # Update simulation to initialize the lidar
+        # Update simulation to initialize the camera
         simulation_app.update()
         
-        if lidar_path:
-            # Setup ROS2 LiDAR publishing graph
+        if camera_path:
+            # Setup ROS2 camera publishing graph
             try:
-                ros2_lidar_graph = setup_ros2_lidar_graph(
-                    lidar_prim_path=lidar_path,
-                    point_cloud_topic=args_cli.lidar_topic,
-                    frame_id=args_cli.lidar_frame_id,
+                ros2_graph = setup_ros2_camera_graph(
+                    camera_prim_path=camera_path,
+                    rgb_topic=args_cli.rgb_topic,
+                    depth_topic=args_cli.depth_topic,
+                    camera_info_topic=args_cli.camera_info_topic,
+                    frame_id=args_cli.camera_frame_id,
                     domain_id=args_cli.ros2_domain_id
                 )
-                print("[INFO] ROS2 LiDAR publishing enabled successfully!")
-                print(f"[INFO] LiDAR Point Cloud topic: {args_cli.lidar_topic}")
-                print(f"[INFO] To view point cloud: ros2 topic echo {args_cli.lidar_topic}")
-                print(f"[INFO] To visualize in RViz2: Add PointCloud2 display with topic {args_cli.lidar_topic}")
+                print("[INFO] ROS2 camera publishing enabled successfully!")
+                print(f"[INFO] Topics: {args_cli.rgb_topic}, {args_cli.depth_topic}, {args_cli.camera_info_topic}")
+                print(f"[INFO] To view topics, run: ros2 topic list")
+                print(f"[INFO] To view RGB image: ros2 run rqt_image_view rqt_image_view {args_cli.rgb_topic}")
             except Exception as e:
-                print(f"[ERROR] Failed to setup ROS2 LiDAR graph: {e}")
-                print("[WARN] Continuing without ROS2 LiDAR publishing...")
+                print(f"[ERROR] Failed to setup ROS2 camera graph: {e}")
+                print("[WARN] Continuing without ROS2 camera publishing...")
         else:
-            print("[WARN] LiDAR creation failed, skipping ROS2 LiDAR publishing setup")
-    else:
-        print("[INFO] LiDAR disabled. Use --enable_lidar to enable RTX LiDAR sensor.")
-
-    # Setup ROS2 cmd_vel subscriber if enabled
-    cmd_vel_subscriber = None
-    if args_cli.enable_cmd_vel:
-        if ROS2_AVAILABLE:
-            try:
-                cmd_vel_subscriber = CmdVelSubscriber(
-                    topic_name=args_cli.cmd_vel_topic,
-                    max_lin_vel_x=args_cli.max_lin_vel_x,
-                    max_lin_vel_y=args_cli.max_lin_vel_y,
-                    max_ang_vel_z=args_cli.max_ang_vel_z,
-                    domain_id=args_cli.ros2_domain_id
-                )
-                print("[INFO] ROS2 cmd_vel subscriber enabled successfully!")
-                print(f"[INFO] Subscribing to topic: {args_cli.cmd_vel_topic}")
-                print(f"[INFO] To send velocity commands: ros2 topic pub {args_cli.cmd_vel_topic} geometry_msgs/msg/Twist '{{linear: {{x: 0.5, y: 0.0, z: 0.0}}, angular: {{x: 0.0, y: 0.0, z: 0.2}}}}'")
-                print(f"[INFO] Or use teleop_twist_keyboard: ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args -r /cmd_vel:={args_cli.cmd_vel_topic}")
-            except Exception as e:
-                print(f"[ERROR] Failed to setup cmd_vel subscriber: {e}")
-                print("[WARN] Continuing without cmd_vel control...")
-                cmd_vel_subscriber = None
+            print("[WARN] Camera creation failed, skipping ROS2 camera publishing setup")
+        
+        # Create RTX LiDAR on the robot if enabled
+        if args_cli.enable_lidar:
+            lidar_path = create_rtx_lidar_on_robot(
+                stage=current_stage,
+                robot_prim_path=robot_prim_path,
+                lidar_name="mid360_lidar",
+                local_position=(0.0, 0.0, 0.8),  # 机器人 pelvis 上方 0.6m
+                local_rotation=(0.0, 0.0, 0.0),
+            )
+            
+            # Update simulation to initialize the lidar
+            simulation_app.update()
+            
+            if lidar_path:
+                # Setup ROS2 LiDAR publishing graph
+                try:
+                    ros2_lidar_graph = setup_ros2_lidar_graph(
+                        lidar_prim_path=lidar_path,
+                        point_cloud_topic=args_cli.lidar_topic,
+                        frame_id=args_cli.lidar_frame_id,
+                        domain_id=args_cli.ros2_domain_id
+                    )
+                    print("[INFO] ROS2 LiDAR publishing enabled successfully!")
+                    print(f"[INFO] LiDAR Point Cloud topic: {args_cli.lidar_topic}")
+                    print(f"[INFO] To view point cloud: ros2 topic echo {args_cli.lidar_topic}")
+                    print(f"[INFO] To visualize in RViz2: Add PointCloud2 display with topic {args_cli.lidar_topic}")
+                except Exception as e:
+                    print(f"[ERROR] Failed to setup ROS2 LiDAR graph: {e}")
+                    print("[WARN] Continuing without ROS2 LiDAR publishing...")
+            else:
+                print("[WARN] LiDAR creation failed, skipping ROS2 LiDAR publishing setup")
         else:
-            print("[WARN] rclpy not available. cmd_vel subscriber disabled.")
-    else:
-        print("[INFO] cmd_vel subscriber disabled. Use --enable_cmd_vel to enable velocity control via ROS2.")
+            print("[INFO] LiDAR disabled. Use --enable_lidar to enable RTX LiDAR sensor.")
 
-    # Setup high-frequency IMU publisher if enabled
-    imu_publisher = None
-    if args_cli.enable_high_freq_imu:
-        if ROS2_AVAILABLE:
-            try:
-                imu_publisher = HighFreqImuPublisher(
-                    topic_name=args_cli.imu_topic,
-                    frame_id=args_cli.imu_frame_id,
-                    publish_rate=args_cli.imu_publish_rate,
-                    domain_id=args_cli.ros2_domain_id
-                )
-                print("[INFO] High-frequency IMU publisher enabled successfully!")
-                print(f"[INFO] Publishing to topic: {args_cli.imu_topic} at {args_cli.imu_publish_rate} Hz")
-                print(f"[INFO] To check IMU frequency: ros2 topic hz {args_cli.imu_topic}")
-            except Exception as e:
-                print(f"[ERROR] Failed to setup high-frequency IMU publisher: {e}")
-                print("[WARN] Continuing without high-frequency IMU publishing...")
-                imu_publisher = None
+        # Setup ROS2 cmd_vel subscriber if enabled
+        if args_cli.enable_cmd_vel:
+            if ROS2_AVAILABLE:
+                try:
+                    cmd_vel_subscriber = CmdVelSubscriber(
+                        topic_name=args_cli.cmd_vel_topic,
+                        max_lin_vel_x=args_cli.max_lin_vel_x,
+                        max_lin_vel_y=args_cli.max_lin_vel_y,
+                        max_ang_vel_z=args_cli.max_ang_vel_z,
+                        domain_id=args_cli.ros2_domain_id
+                    )
+                    print("[INFO] ROS2 cmd_vel subscriber enabled successfully!")
+                    print(f"[INFO] Subscribing to topic: {args_cli.cmd_vel_topic}")
+                    print(f"[INFO] To send velocity commands: ros2 topic pub {args_cli.cmd_vel_topic} geometry_msgs/msg/Twist '{{linear: {{x: 0.5, y: 0.0, z: 0.0}}, angular: {{x: 0.0, y: 0.0, z: 0.2}}}}'")
+                    print(f"[INFO] Or use teleop_twist_keyboard: ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args -r /cmd_vel:={args_cli.cmd_vel_topic}")
+                except Exception as e:
+                    print(f"[ERROR] Failed to setup cmd_vel subscriber: {e}")
+                    print("[WARN] Continuing without cmd_vel control...")
+            else:
+                print("[WARN] rclpy not available. cmd_vel subscriber disabled.")
         else:
-            print("[WARN] rclpy not available. High-frequency IMU publisher disabled.")
-    else:
-        print("[INFO] High-frequency IMU publisher disabled. Use --enable_high_freq_imu to enable.")
+            print("[INFO] cmd_vel subscriber disabled. Use --enable_cmd_vel to enable velocity control via ROS2.")
 
-    # Setup odom TF publisher if enabled
-    odom_tf_publisher = None
-    if args_cli.enable_odom_tf:
-        if ROS2_AVAILABLE:
-            try:
-                odom_tf_publisher = OdomTFPublisher(
-                    topic_name=args_cli.odom_tf_topic,
-                    odom_frame_id=args_cli.odom_frame_id,
-                    base_frame_id=args_cli.base_frame_id,
-                    publish_rate=args_cli.odom_tf_publish_rate,
-                    domain_id=args_cli.ros2_domain_id
-                )
-                print("[INFO] Odom TF publisher enabled successfully!")
-                print(f"[INFO] Publishing TF {args_cli.odom_frame_id} -> {args_cli.base_frame_id} at {args_cli.odom_tf_publish_rate} Hz")
-                print(f"[INFO] To view TF tree: ros2 run tf2_tools view_frames")
-            except Exception as e:
-                print(f"[ERROR] Failed to setup odom TF publisher: {e}")
-                print("[WARN] Continuing without odom TF publishing...")
-                odom_tf_publisher = None
+        # Setup high-frequency IMU publisher if enabled
+        if args_cli.enable_high_freq_imu:
+            if ROS2_AVAILABLE:
+                try:
+                    imu_publisher = HighFreqImuPublisher(
+                        topic_name=args_cli.imu_topic,
+                        frame_id=args_cli.imu_frame_id,
+                        publish_rate=args_cli.imu_publish_rate,
+                        domain_id=args_cli.ros2_domain_id
+                    )
+                    print("[INFO] High-frequency IMU publisher enabled successfully!")
+                    print(f"[INFO] Publishing to topic: {args_cli.imu_topic} at {args_cli.imu_publish_rate} Hz")
+                    print(f"[INFO] To check IMU frequency: ros2 topic hz {args_cli.imu_topic}")
+                except Exception as e:
+                    print(f"[ERROR] Failed to setup high-frequency IMU publisher: {e}")
+                    print("[WARN] Continuing without high-frequency IMU publishing...")
+            else:
+                print("[WARN] rclpy not available. High-frequency IMU publisher disabled.")
         else:
-            print("[WARN] rclpy not available. Odom TF publisher disabled.")
-    else:
-        print("[INFO] Odom TF publisher disabled. Use --enable_odom_tf to enable.")
+            print("[INFO] High-frequency IMU publisher disabled. Use --enable_high_freq_imu to enable.")
 
-    # Setup clock publisher if enabled
-    clock_publisher = None
-    if args_cli.enable_clock:
-        if ROS2_AVAILABLE:
-            try:
-                clock_publisher = ClockPublisher(
-                    topic_name=args_cli.clock_topic,
-                    publish_rate=args_cli.clock_publish_rate,
-                    domain_id=args_cli.ros2_domain_id
-                )
-                print("[INFO] Clock publisher enabled successfully!")
-                print(f"[INFO] Publishing simulation time to topic: {args_cli.clock_topic} at {args_cli.clock_publish_rate} Hz")
-                print("[INFO] ROS2 nodes should use 'use_sim_time:=true' to synchronize with simulation")
-            except Exception as e:
-                print(f"[ERROR] Failed to setup clock publisher: {e}")
-                print("[WARN] Continuing without clock publishing...")
-                clock_publisher = None
+        # Setup odom TF publisher if enabled
+        if args_cli.enable_odom_tf:
+            if ROS2_AVAILABLE:
+                try:
+                    odom_tf_publisher = OdomTFPublisher(
+                        topic_name=args_cli.odom_tf_topic,
+                        odom_frame_id=args_cli.odom_frame_id,
+                        base_frame_id=args_cli.base_frame_id,
+                        publish_rate=args_cli.odom_tf_publish_rate,
+                        domain_id=args_cli.ros2_domain_id
+                    )
+                    print("[INFO] Odom TF publisher enabled successfully!")
+                    print(f"[INFO] Publishing TF {args_cli.odom_frame_id} -> {args_cli.base_frame_id} at {args_cli.odom_tf_publish_rate} Hz")
+                    print(f"[INFO] To view TF tree: ros2 run tf2_tools view_frames")
+                except Exception as e:
+                    print(f"[ERROR] Failed to setup odom TF publisher: {e}")
+                    print("[WARN] Continuing without odom TF publishing...")
+            else:
+                print("[WARN] rclpy not available. Odom TF publisher disabled.")
         else:
-            print("[WARN] rclpy not available. Clock publisher disabled.")
-    else:
-        print("[INFO] Clock publisher disabled. Use --enable_clock to enable.")
+            print("[INFO] Odom TF publisher disabled. Use --enable_odom_tf to enable.")
 
-    # setup keyboard control if not headless
-    if not args_cli.headless:
-        from legged_lab.utils.keyboard import Keyboard
-        keyboard = Keyboard(env)  # noqa:F841
-        print("[INFO] Keyboard control enabled. Use arrow keys to control the robot.")
+        # Setup clock publisher if enabled
+        if args_cli.enable_clock:
+            if ROS2_AVAILABLE:
+                try:
+                    clock_publisher = ClockPublisher(
+                        topic_name=args_cli.clock_topic,
+                        publish_rate=args_cli.clock_publish_rate,
+                        domain_id=args_cli.ros2_domain_id
+                    )
+                    print("[INFO] Clock publisher enabled successfully!")
+                    print(f"[INFO] Publishing simulation time to topic: {args_cli.clock_topic} at {args_cli.clock_publish_rate} Hz")
+                    print("[INFO] ROS2 nodes should use 'use_sim_time:=true' to synchronize with simulation")
+                except Exception as e:
+                    print(f"[ERROR] Failed to setup clock publisher: {e}")
+                    print("[WARN] Continuing without clock publishing...")
+            else:
+                print("[WARN] rclpy not available. Clock publisher disabled.")
+        else:
+            print("[INFO] Clock publisher disabled. Use --enable_clock to enable.")
 
-    # run inference with the policy
-    obs, _ = env.get_observations()
-    print("[INFO] Starting policy inference...")
-    print("[INFO] Press Ctrl+C to stop the simulation.")
+        # setup keyboard control if not headless
+        if not args_cli.headless:
+            from legged_lab.utils.keyboard import Keyboard
+            keyboard = Keyboard(env)  # noqa:F841
+            print("[INFO] Keyboard control enabled. Use arrow keys to control the robot.")
 
-    try:
+        # run inference with the policy
+        obs, _ = env.get_observations()
+        print("[INFO] Starting policy inference...")
+        print("[INFO] Press Ctrl+C to stop the simulation.")
+
         with torch.inference_mode():
             while simulation_app.is_running():
                 # Update velocity commands from cmd_vel subscriber
@@ -1915,21 +1946,60 @@ def main():
                 if clock_publisher is not None:
                     sim_time = omni.timeline.get_timeline_interface().get_current_time()
                     clock_publisher.update_sim_time(sim_time)
+
     except KeyboardInterrupt:
         print("\n[INFO] Simulation interrupted by user.")
+    except Exception as e:
+        print(f"\n[ERROR] Simulation error: {e}")
+        import traceback
+        traceback.print_exc()
     finally:
-        # Cleanup cmd_vel subscriber
+        print("[INFO] Cleaning up resources...")
+        
+        # Cleanup ROS2 publishers/subscribers
         if cmd_vel_subscriber is not None:
-            cmd_vel_subscriber.shutdown()
-        # Cleanup IMU publisher
+            try:
+                cmd_vel_subscriber.shutdown()
+            except Exception as e:
+                print(f"[WARN] Error shutting down cmd_vel subscriber: {e}")
+        
         if imu_publisher is not None:
-            imu_publisher.shutdown()
-        # Cleanup odom TF publisher
+            try:
+                imu_publisher.shutdown()
+            except Exception as e:
+                print(f"[WARN] Error shutting down IMU publisher: {e}")
+        
         if odom_tf_publisher is not None:
-            odom_tf_publisher.shutdown()
-        # Cleanup clock publisher
+            try:
+                odom_tf_publisher.shutdown()
+            except Exception as e:
+                print(f"[WARN] Error shutting down odom TF publisher: {e}")
+        
         if clock_publisher is not None:
-            clock_publisher.shutdown()
+            try:
+                clock_publisher.shutdown()
+            except Exception as e:
+                print(f"[WARN] Error shutting down clock publisher: {e}")
+        
+        # Shutdown rclpy if it was initialized
+        if ROS2_AVAILABLE:
+            try:
+                if rclpy.ok():
+                    rclpy.shutdown()
+                    print("[INFO] rclpy shutdown complete")
+            except Exception as e:
+                print(f"[WARN] Error shutting down rclpy: {e}")
+        
+        # Clean up temporary USD file
+        if temp_usd_path is not None:
+            try:
+                if os.path.exists(temp_usd_path):
+                    os.remove(temp_usd_path)
+                    print(f"[INFO] Cleaned up temporary USD file: {temp_usd_path}")
+            except Exception as e:
+                print(f"[WARN] Failed to delete temporary USD file {temp_usd_path}: {e}")
+        
+        print("[INFO] Cleanup complete")
 
 
 if __name__ == "__main__":
