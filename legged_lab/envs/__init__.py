@@ -32,6 +32,11 @@ from legged_lab.envs.tienkung.walk_with_sensor_cfg import (
     TienKungWalkWithSensorAgentCfg,
     TienKungWalkWithSensorFlatEnvCfg,
 )
+# Unitree-RL-Lab style configuration (standard PPO, no AMP)
+from legged_lab.envs.tienkung.unitree_style_walk_cfg import (
+    TienKungUnitreeStyleEnvCfg,
+    TienKungUnitreeStyleAgentCfg,
+)
 from legged_lab.utils.task_registry import task_registry
 
 task_registry.register("walk", TienKungEnv, TienKungWalkFlatEnvCfg(), TienKungWalkAgentCfg())
@@ -41,4 +46,9 @@ task_registry.register(
 )
 task_registry.register(
     "run_with_sensor", TienKungEnv, TienKungRunWithSensorFlatEnvCfg(), TienKungRunWithSensorAgentCfg()
+)
+
+# Register Unitree-RL-Lab style task (standard PPO, no AMP)
+task_registry.register(
+    "unitree_style_walk", TienKungEnv, TienKungUnitreeStyleEnvCfg(), TienKungUnitreeStyleAgentCfg()
 )

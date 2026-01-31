@@ -292,3 +292,226 @@ def gait_feet_frc_support_perio(env: TienKungEnv, delta_t: float = 0.02) -> torc
     left_frc_score = left_frc_support_mask * (1 - torch.exp(-10 * torch.square(env.avg_feet_force_per_step[:, 0])))
     right_frc_score = right_frc_support_mask * (1 - torch.exp(-10 * torch.square(env.avg_feet_force_per_step[:, 1])))
     return left_frc_score + right_frc_score
+
+
+# ============================================================================
+# Humanoid-Gym Style Reward Functions
+# These reward functions are inspired by the roboterax/humanoid-gym project
+# ============================================================================
+
+
+def joint_pos_tracking(
+    env: TienKungEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+) -> torch.Tensor:
+    """
+    Reward for tracking target joint positions (Humanoid-Gym style).
+    Uses exponential reward with L1 penalty for large deviations.
+    """
+    asset: Articulation = env.scene[asset_cfg.name]
+    # Target is default joint position
+    diff = asset.data.joint_pos[:, asset_cfg.joint_ids] - asset.data.default_joint_pos[:, asset_cfg.joint_ids]
+    diff_norm = torch.norm(diff, dim=1)
+    # Humanoid-Gym formula: exp(-2 * norm) - 0.2 * clamp(norm, 0, 0.5)
+    reward = torch.exp(-2 * diff_norm) - 0.2 * torch.clamp(diff_norm, 0, 0.5)
+    return reward
+
+
+def feet_clearance(
+    env: TienKungEnv,
+    target_height: float = 0.06,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    sensor_cfg: SceneEntityCfg = None,
+) -> torch.Tensor:
+    """
+    Reward for appropriate foot lift during swing phase (Humanoid-Gym style).
+    Encourages feet to reach target height during swing.
+    """
+    asset: Articulation = env.scene[asset_cfg.name]
+    
+    # Get feet height relative to ground
+    feet_pos = asset.data.body_pos_w[:, env.feet_body_ids, 2]  # z-height
+    base_height = asset.data.root_pos_w[:, 2]
+    
+    # Get swing mask from gait phase
+    delta_t = 0.02
+    left_swing_mask = gait_clock(env.gait_phase[:, 0], env.phase_ratio[:, 0], delta_t)[0]
+    right_swing_mask = gait_clock(env.gait_phase[:, 1], env.phase_ratio[:, 1], delta_t)[0]
+    
+    # Calculate feet height relative to nominal ground level
+    left_foot_height = feet_pos[:, 0] - (base_height - 0.75)  # Approximate leg length
+    right_foot_height = feet_pos[:, 1] - (base_height - 0.75)
+    
+    # Reward when feet are close to target height during swing
+    left_reward = left_swing_mask * torch.exp(-torch.abs(left_foot_height - target_height) * 50)
+    right_reward = right_swing_mask * torch.exp(-torch.abs(right_foot_height - target_height) * 50)
+    
+    return left_reward + right_reward
+
+
+def feet_contact_number(
+    env: TienKungEnv, sensor_cfg: SceneEntityCfg
+) -> torch.Tensor:
+    """
+    Reward for matching foot contacts with expected gait phase (Humanoid-Gym style).
+    """
+    contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
+    net_contact_forces = contact_sensor.data.net_forces_w_history
+    
+    # Check if feet are in contact
+    left_contact = torch.max(torch.norm(net_contact_forces[:, :, sensor_cfg.body_ids[0]], dim=-1), dim=1)[0] > 1.0
+    right_contact = torch.max(torch.norm(net_contact_forces[:, :, sensor_cfg.body_ids[1]], dim=-1), dim=1)[0] > 1.0
+    
+    # Get expected contact from gait phase (stance = contact expected)
+    delta_t = 0.02
+    left_stance_expected = gait_clock(env.gait_phase[:, 0], env.phase_ratio[:, 0], delta_t)[1] > 0.5
+    right_stance_expected = gait_clock(env.gait_phase[:, 1], env.phase_ratio[:, 1], delta_t)[1] > 0.5
+    
+    # Reward matching, penalize mismatch
+    left_match = torch.where(left_contact == left_stance_expected, 1.0, -0.3)
+    right_match = torch.where(right_contact == right_stance_expected, 1.0, -0.3)
+    
+    return left_match + right_match
+
+
+def feet_air_time_reward(
+    env: TienKungEnv, threshold: float = 0.5, sensor_cfg: SceneEntityCfg = None
+) -> torch.Tensor:
+    """
+    Reward for feet air time (Humanoid-Gym style).
+    Promotes longer steps by rewarding feet air time.
+    """
+    contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
+    air_time = contact_sensor.data.current_air_time[:, sensor_cfg.body_ids]
+    
+    # Clamp air time and sum
+    clamped_air_time = torch.clamp(air_time, max=threshold)
+    reward = torch.sum(clamped_air_time, dim=1)
+    
+    # No reward for zero command
+    cmd_magnitude = torch.norm(env.command_generator.command[:, :2], dim=1) + torch.abs(env.command_generator.command[:, 2])
+    reward *= (cmd_magnitude > 0.1).float()
+    
+    return reward
+
+
+def orientation_reward(
+    env: TienKungEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+) -> torch.Tensor:
+    """
+    Reward for keeping the robot upright (Humanoid-Gym style).
+    Uses cosine of angle between up vector and robot's z-axis.
+    """
+    asset: Articulation = env.scene[asset_cfg.name]
+    # Projected gravity gives us how much the robot is tilted
+    # When upright, projected_gravity_b should be [0, 0, -1]
+    projected_gravity = asset.data.projected_gravity_b
+    
+    # The z-component of projected gravity tells us how upright the robot is
+    # -1 means perfectly upright, values closer to 0 or positive mean tilted
+    uprightness = -projected_gravity[:, 2]  # Will be ~1 when upright
+    
+    # Convert to reward using exp
+    tilt_amount = torch.sqrt(projected_gravity[:, 0]**2 + projected_gravity[:, 1]**2)
+    reward = torch.exp(-tilt_amount * 10)
+    
+    return reward
+
+
+def base_height_reward(
+    env: TienKungEnv, target_height: float = 0.75, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+) -> torch.Tensor:
+    """
+    Reward for maintaining target base height (Humanoid-Gym style).
+    """
+    asset: Articulation = env.scene[asset_cfg.name]
+    base_height = asset.data.root_pos_w[:, 2]
+    
+    # Humanoid-Gym formula: exp(-|height - target| * 100)
+    height_error = torch.abs(base_height - target_height)
+    reward = torch.exp(-height_error * 100)
+    
+    return reward
+
+
+def base_acc_penalty(
+    env: TienKungEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+) -> torch.Tensor:
+    """
+    Penalty for high base accelerations (Humanoid-Gym style).
+    Encourages smoother base motion.
+    """
+    asset: Articulation = env.scene[asset_cfg.name]
+    
+    # Approximate acceleration from velocity change
+    # Note: This requires storing previous velocity, using angular acceleration as proxy
+    root_acc = asset.data.root_ang_vel_b  # Using angular velocity as proxy
+    acc_norm = torch.norm(root_acc, dim=1)
+    
+    # Humanoid-Gym formula: exp(-norm * 3)
+    reward = torch.exp(-acc_norm * 3)
+    
+    return reward
+
+
+def action_smoothness_penalty(env: TienKungEnv) -> torch.Tensor:
+    """
+    Penalty for non-smooth actions (Humanoid-Gym style).
+    Penalizes differences between consecutive actions.
+    """
+    buffer = env.action_buffer._circular_buffer.buffer
+    
+    if buffer.shape[1] >= 3:
+        # Term 1: difference between current and previous action
+        term_1 = torch.sum(torch.square(buffer[:, -1, :] - buffer[:, -2, :]), dim=1)
+        # Term 2: difference between previous two actions
+        term_2 = torch.sum(torch.square(buffer[:, -2, :] - buffer[:, -3, :]), dim=1)
+        # Term 3: second derivative approximation
+        term_3 = torch.sum(torch.square(buffer[:, -1, :] - 2 * buffer[:, -2, :] + buffer[:, -3, :]), dim=1)
+        
+        return term_1 + term_2 + 0.5 * term_3
+    else:
+        return torch.sum(torch.square(buffer[:, -1, :] - buffer[:, -2, :]), dim=1)
+
+
+def torques_penalty(
+    env: TienKungEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+) -> torch.Tensor:
+    """
+    Penalty for high torques (Humanoid-Gym style).
+    """
+    asset: Articulation = env.scene[asset_cfg.name]
+    return torch.sum(torch.square(asset.data.applied_torque[:, asset_cfg.joint_ids]), dim=1)
+
+
+def dof_vel_penalty(
+    env: TienKungEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+) -> torch.Tensor:
+    """
+    Penalty for high DOF velocities (Humanoid-Gym style).
+    """
+    asset: Articulation = env.scene[asset_cfg.name]
+    return torch.sum(torch.square(asset.data.joint_vel[:, asset_cfg.joint_ids]), dim=1)
+
+
+def default_joint_pos_penalty(
+    env: TienKungEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+) -> torch.Tensor:
+    """
+    Penalty for deviating from default joint positions (Humanoid-Gym style).
+    Unlike joint_deviation_l1, this always applies regardless of command.
+    """
+    asset: Articulation = env.scene[asset_cfg.name]
+    angle = asset.data.joint_pos[:, asset_cfg.joint_ids] - asset.data.default_joint_pos[:, asset_cfg.joint_ids]
+    return torch.sum(torch.square(angle), dim=1)
+
+
+def collision_penalty(
+    env: TienKungEnv, sensor_cfg: SceneEntityCfg
+) -> torch.Tensor:
+    """
+    Penalty for collisions (Humanoid-Gym style).
+    """
+    contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
+    contact_forces = contact_sensor.data.net_forces_w[:, sensor_cfg.body_ids, :]
+    in_contact = torch.norm(contact_forces, dim=-1) > 0.1
+    return torch.sum(in_contact.float(), dim=1)
