@@ -1220,7 +1220,9 @@ def create_rtx_lidar_on_robot(stage, robot_prim_path: str, lidar_name: str = "mi
                               local_position: tuple = (0.0, 0.0, 0.4),
                               local_rotation: tuple = (0.0, 0.0, 0.0)):
     """
-    Create an RTX LiDAR sensor attached to the robot with custom attributes.
+    Create an RTX LiDAR sensor attached to the robot using Isaac Sim's built-in Example_Rotary config.
+    
+    This creates a 360° rotary LiDAR suitable for SLAM and navigation applications.
     
     Args:
         stage: USD stage
@@ -1230,7 +1232,7 @@ def create_rtx_lidar_on_robot(stage, robot_prim_path: str, lidar_name: str = "mi
         local_rotation: Local rotation offset from parent (roll, pitch, yaw) in degrees
     
     Returns:
-        str: Path to the created lidar prim
+        str: Path to the created lidar prim, or None if creation failed
     """
     # Find the robot's base/pelvis link to attach lidar
     robot_prim = stage.GetPrimAtPath(robot_prim_path)
@@ -1257,39 +1259,6 @@ def create_rtx_lidar_on_robot(stage, robot_prim_path: str, lidar_name: str = "mi
     
     lidar_path = f"{parent_path}/{lidar_name}"
     
-    # Custom sensor attributes for Solid State LiDAR (Optimized for humanoid robot head-mounted)
-    # Solid-state LiDARs don't have rotating parts and complete full scan in single frame
-    # Parameters optimized for SLAM and navigation with head-mounted position (~1.5m height)
-    # NOTE: Some attributes may not be modifiable after LiDAR creation - consider using a custom config file
-    sensor_attributes = {
-        'omni:sensor:Core:scanType': "solidState",
-        'omni:sensor:Core:intensityProcessing': "NORMALIZATION",
-        'omni:sensor:Core:rayType': "IDEALIZED",
-        'omni:sensor:Core:nearRangeM': 0.3,           # Increased to 0.3m to avoid scanning robot body
-        'omni:sensor:Core:farRangeM': 30.0,           # 30m sufficient for indoor/outdoor navigation
-        'omni:sensor:Core:rangeResolutionM': 0.004,
-        'omni:sensor:Core:rangeAccuracyM': 0.02,
-        'omni:sensor:Core:avgPowerW': 0.002,
-        'omni:sensor:Core:minReflectance': 0.1,
-        'omni:sensor:Core:minReflectanceRange': 30.0, # Match farRangeM
-        'omni:sensor:Core:wavelengthNm': 905.0,
-        'omni:sensor:Core:pulseTimeNs': 6,
-        # Removed error parameters to get cleaner point cloud (set to 0 for ideal sensor)
-        'omni:sensor:Core:azimuthErrorMean': 0.0,
-        'omni:sensor:Core:azimuthErrorStd': 0.0,      # No azimuth noise
-        'omni:sensor:Core:elevationErrorMean': 0.0,
-        'omni:sensor:Core:elevationErrorStd': 0.0,    # No elevation noise
-        'omni:sensor:Core:maxReturns': 1,             # Single return to reduce noise
-        'omni:sensor:Core:reportRateBaseHz': 10.0,
-        'omni:sensor:Core:numberOfEmitters': 64,      # Reduced for better performance
-        'omni:sensor:Core:numLines': 64,              # Match numberOfEmitters
-        'omni:sensor:Core:startAzimuthDeg': -120.0,   # 240° horizontal FOV
-        'omni:sensor:Core:endAzimuthDeg': 120.0,
-        'omni:sensor:Core:upElevationDeg': 10.0,      # Less upward view needed
-        'omni:sensor:Core:downElevationDeg': -30.0,   # Reduced from -90° to avoid ground penetration noise
-        'omni:sensor:Core:intensityMappingType': "LINEAR",
-    }
-    
     # Calculate orientation from local rotation (Euler angles to quaternion)
     import math
     roll = math.radians(local_rotation[0])
@@ -1310,44 +1279,21 @@ def create_rtx_lidar_on_robot(stage, robot_prim_path: str, lidar_name: str = "mi
     qz = cr * cp * sy - sr * sp * cy
     
     try:
-        # Execute the command to create the RTX LiDAR
+        # Execute the command to create the RTX LiDAR with Example_Rotary config
+        # This provides a 360° rotary LiDAR suitable for SLAM and navigation
+        print(f"[INFO] Creating RTX LiDAR with config: Example_Rotary")
+        
         success, sensor = omni.kit.commands.execute(
             "IsaacSensorCreateRtxLidar",
             path=lidar_name,
             parent=parent_path,
-            config="Example_Solid_State",  # Solid-state LiDAR config for Isaac Sim 4.5
+            config="Example_Rotary",  # Built-in 360° rotary LiDAR config
             translation=Gf.Vec3d(local_position[0], local_position[1], local_position[2]),
             orientation=Gf.Quatd(qw, qx, qy, qz),
         )
         
         if success:
             print(f"[INFO] Created RTX LiDAR at: {lidar_path}")
-            
-            # Apply custom sensor attributes
-            lidar_prim = stage.GetPrimAtPath(lidar_path)
-            if lidar_prim.IsValid():
-                applied_count = 0
-                invalid_attrs = []
-                for attr_name, attr_value in sensor_attributes.items():
-                    # Skip array attributes that might not be supported directly
-                    if isinstance(attr_value, list):
-                        continue
-                    try:
-                        attr = lidar_prim.GetAttribute(attr_name)
-                        if attr.IsValid():
-                            attr.Set(attr_value)
-                            applied_count += 1
-                        else:
-                            invalid_attrs.append(attr_name)
-                    except Exception as e:
-                        print(f"[WARN] Could not set attribute {attr_name}: {e}")
-                        invalid_attrs.append(attr_name)
-                
-                print(f"[INFO] Applied {applied_count}/{len(sensor_attributes)} custom LiDAR attributes")
-                if invalid_attrs:
-                    print(f"[WARN] Invalid/unsupported LiDAR attributes: {invalid_attrs}")
-                    print(f"[INFO] Note: Some attributes may require a custom LiDAR config file instead of runtime modification")
-            
             return lidar_path
         else:
             print(f"[ERROR] Failed to create RTX LiDAR")
@@ -1437,7 +1383,7 @@ def setup_ros2_lidar_graph(lidar_prim_path: str, point_cloud_topic: str,
                         ("ROS2LidarHelper.inputs:type", "point_cloud"),
                         ("ROS2LidarHelper.inputs:topicName", point_cloud_topic),
                         ("ROS2LidarHelper.inputs:frameId", frame_id),
-                        ("ROS2LidarHelper.inputs:fullScan", True),  # Publish after full scan
+                        ("ROS2LidarHelper.inputs:fullScan", False),  # Publish after full scan
                     ],
                     keys.CONNECT: [
                         # Connect tick to render product creation
@@ -1743,7 +1689,7 @@ def main():
                 stage=current_stage,
                 robot_prim_path=robot_prim_path,
                 lidar_name="mid360_lidar",
-                local_position=(0.0, 0.0, 0.8),  # 机器人 pelvis 上方 0.6m
+                local_position=(0.0, 0.0, 1.0),  # 机器人 pelvis 上方 1.0m
                 local_rotation=(0.0, 0.0, 0.0),
             )
             
