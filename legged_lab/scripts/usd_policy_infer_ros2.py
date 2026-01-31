@@ -29,7 +29,7 @@ Prerequisites:
     - The isaacsim.ros2.bridge extension must be enabled
 
 Usage:
-    # Run with default warehouse USD environment
+    # Run with default museum USD environment (../sense/museum/museum.usd)
     python legged_lab/scripts/usd_policy_infer_ros2.py --task walk --policy_path /path/to/exported/policy.pt
 
     # Run with custom USD environment
@@ -76,7 +76,7 @@ from legged_lab.utils import task_registry
 parser = argparse.ArgumentParser(description="Policy inference for TienKung robot in a USD environment with ROS2 camera publishing.")
 parser.add_argument("--task", type=str, default="walk", help="Name of the task.")
 parser.add_argument("--policy_path", type=str, help="Path to model checkpoint exported as jit.", required=True)
-parser.add_argument("--usd_path", type=str, default=None, help="Path to custom USD environment file.")
+parser.add_argument("--usd_path", type=str, default="../sense/museum/museum.usd", help="Path to custom USD environment file (default: ../sense/museum/museum.usd).")
 parser.add_argument("--num_envs", type=int, default=1, help="Number of environments to simulate.")
 parser.add_argument("--seed", type=int, default=None, help="Seed used for the environment")
 # ROS2 camera configuration
@@ -139,8 +139,6 @@ import omni.usd
 import omni.kit.app
 import omni.timeline
 from pxr import Usd, UsdGeom, Gf
-
-from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 
 # ROS2 imports for cmd_vel subscriber, IMU publisher, and LiDAR publisher
 try:
@@ -1590,13 +1588,9 @@ def main():
         env_cfg.scene.env_spacing = 2.5
         env_cfg.commands.rel_standing_envs = 0.0
 
-        # set terrain to USD or default warehouse
-        if args_cli.usd_path is not None:
-            usd_path = os.path.abspath(args_cli.usd_path)
-            print(f"[INFO] Using custom USD environment: {usd_path}")
-        else:
-            usd_path = f"{ISAAC_NUCLEUS_DIR}/Environments/Simple_Warehouse/warehouse.usd"
-            print(f"[INFO] Using default warehouse USD environment: {usd_path}")
+        # set terrain to USD (default: ../sense/museum/museum.usd)
+        usd_path = os.path.abspath(args_cli.usd_path)
+        print(f"[INFO] Using USD environment: {usd_path}")
 
         # override terrain configuration for USD environment
         env_cfg.scene.terrain_type = "usd"
