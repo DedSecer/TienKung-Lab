@@ -80,7 +80,7 @@ parser.add_argument("--usd_path", type=str, default="../sense/museum/museum.usd"
 parser.add_argument("--num_envs", type=int, default=1, help="Number of environments to simulate.")
 parser.add_argument("--seed", type=int, default=None, help="Seed used for the environment")
 # ROS2 camera configuration
-parser.add_argument("--rgb_topic", type=str, default="/rgb", help="ROS2 topic name for RGB image.")
+parser.add_argument("--rgb_topic", type=str, default="/camera/color/image_rect_color", help="ROS2 topic name for RGB image.")
 parser.add_argument("--depth_topic", type=str, default="/depth", help="ROS2 topic name for depth image.")
 parser.add_argument("--camera_info_topic", type=str, default="/camera_info", help="ROS2 topic name for camera info.")
 parser.add_argument("--camera_frame_id", type=str, default="robot_camera", help="Frame ID for camera messages.")
