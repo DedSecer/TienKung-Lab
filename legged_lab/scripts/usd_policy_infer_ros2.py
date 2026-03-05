@@ -38,8 +38,11 @@ Usage:
     # Run with custom camera topic names
     python legged_lab/scripts/usd_policy_infer_ros2.py --task walk --policy_path /path/to/policy.pt --rgb_topic /camera/rgb --depth_topic /camera/depth
 
-    # Run with RTX LiDAR disabled (LiDAR is enabled by default)
+    # Run with PhysX LiDAR disabled (LiDAR is enabled by default)
     python legged_lab/scripts/usd_policy_infer_ros2.py --task walk --policy_path /path/to/policy.pt --no-enable_lidar
+
+    # Run with custom PhysX LiDAR parameters
+    python legged_lab/scripts/usd_policy_infer_ros2.py --task walk --policy_path /path/to/policy.pt --lidar_fov 360.0 30.0 --lidar_resolution 0.4 4.0 --lidar_rotation_rate 20.0
 
     # Run with cmd_vel subscriber enabled for velocity control
     python legged_lab/scripts/usd_policy_infer_ros2.py --task walk --policy_path /path/to/policy.pt --enable_cmd_vel --cmd_vel_topic /cmd_vel
@@ -51,7 +54,7 @@ ROS2 Topics Published (by default):
     - /rgb (sensor_msgs/Image): RGB camera image
     - /depth (sensor_msgs/Image): Depth camera image
     - /camera_info (sensor_msgs/CameraInfo): Camera intrinsic parameters
-    - /point_cloud (sensor_msgs/PointCloud2): RTX LiDAR point cloud data (enabled by default, use --no-enable_lidar to disable)
+    - /point_cloud (sensor_msgs/PointCloud2): PhysX LiDAR point cloud data (enabled by default, use --no-enable_lidar to disable)
     - /imu/data (sensor_msgs/Imu): High-frequency IMU data (enabled by default, use --no-enable_high_freq_imu to disable)
     - /clock (rosgraph_msgs/Clock): Simulation clock (enabled by default, use --no-enable_clock to disable)
     - /tf (tf2_msgs/TFMessage): odom->base_link transform (enabled by default, use --no-enable_odom_tf to disable)
@@ -87,10 +90,15 @@ parser.add_argument("--camera_frame_id", type=str, default="robot_camera", help=
 parser.add_argument("--camera_width", type=int, default=640, help="Camera image width.")
 parser.add_argument("--camera_height", type=int, default=480, help="Camera image height.")
 parser.add_argument("--ros2_domain_id", type=int, default=0, help="ROS2 domain ID.")
-# RTX LiDAR configuration
-parser.add_argument("--enable_lidar", action=argparse.BooleanOptionalAction, default=True, help="Enable RTX LiDAR sensor (enabled by default, use --no-enable_lidar to disable).")
+# PhysX LiDAR configuration
+parser.add_argument("--enable_lidar", action=argparse.BooleanOptionalAction, default=True, help="Enable PhysX LiDAR sensor (enabled by default, use --no-enable_lidar to disable).")
 parser.add_argument("--lidar_topic", type=str, default="/point_cloud", help="ROS2 topic name for LiDAR point cloud.")
 parser.add_argument("--lidar_frame_id", type=str, default="lidar_frame", help="Frame ID for LiDAR messages.")
+parser.add_argument("--lidar_fov", type=float, nargs=2, default=[360.0, 30.0], help="PhysX LiDAR field of view [horizontal, vertical] in degrees (default: 360.0 30.0).")
+parser.add_argument("--lidar_resolution", type=float, nargs=2, default=[0.4, 4.0], help="PhysX LiDAR resolution [horizontal, vertical] in degrees (default: 0.4 4.0).")
+parser.add_argument("--lidar_rotation_rate", type=float, default=20.0, help="PhysX LiDAR rotation rate in Hz (default: 20.0). Set to 0 for static scan.")
+parser.add_argument("--lidar_valid_range", type=float, nargs=2, default=[0.4, 100.0], help="PhysX LiDAR valid range [min, max] in meters (default: 0.4 100.0).")
+parser.add_argument("--lidar_high_lod", action="store_true", default=True, help="Enable high LOD for 3D point cloud output (default: True).")
 # ROS2 cmd_vel subscriber configuration
 parser.add_argument("--enable_cmd_vel", action="store_true", help="Enable ROS2 cmd_vel subscriber for velocity control.")
 parser.add_argument("--cmd_vel_topic", type=str, default="/cmd_vel", help="ROS2 topic name for velocity commands (geometry_msgs/Twist).")
@@ -132,13 +140,15 @@ import io
 import os
 import torch
 import numpy as np
+import math
 
 import omni
 import omni.graph.core as og
 import omni.usd
 import omni.kit.app
 import omni.timeline
-from pxr import Usd, UsdGeom, Gf
+from pxr import Usd, UsdGeom, Gf, Sdf
+import usdrt.Sdf
 
 # ROS2 imports for cmd_vel subscriber, IMU publisher, and LiDAR publisher
 try:
@@ -1074,12 +1084,14 @@ def enable_required_extensions():
     
     extension_manager = omni.kit.app.get_app().get_extension_manager()
     
-    # All required extensions for ROS2 camera publishing
+    # All required extensions for ROS2 camera publishing and PhysX LiDAR
     required_extensions = [
         # ROS2 bridge extensions (try new name first, then legacy)
         ("isaacsim.ros2.bridge", "omni.isaac.ros2_bridge"),
         # Core nodes extensions (try new name first, then legacy)
         ("isaacsim.core.nodes", "omni.isaac.core_nodes"),
+        # PhysX sensor extensions for LiDAR
+        ("isaacsim.sensors.physx", "omni.isaac.range_sensor"),
     ]
     
     enabled_extensions = []
@@ -1214,13 +1226,20 @@ def create_camera_on_robot(stage, robot_prim_path: str, camera_name: str = "head
     return camera_path
 
 
-def create_rtx_lidar_on_robot(stage, robot_prim_path: str, lidar_name: str = "mid360_lidar",
-                              local_position: tuple = (0.0, 0.0, 0.4),
-                              local_rotation: tuple = (0.0, 0.0, 0.0)):
+def create_physx_lidar_on_robot(stage, robot_prim_path: str, lidar_name: str = "mid360_lidar",
+                               local_position: tuple = (0.0, 0.0, 0.4),
+                               local_rotation: tuple = (0.0, 0.0, 0.0),
+                               fov: tuple = (360.0, 30.0),
+                               resolution: tuple = (0.4, 4.0),
+                               rotation_rate: float = 20.0,
+                               valid_range: tuple = (0.4, 100.0),
+                               high_lod: bool = True):
     """
-    Create an RTX LiDAR sensor attached to the robot using Isaac Sim's built-in Example_Rotary config.
+    Create a PhysX LiDAR sensor attached to the robot using Isaac Sim's RangeSensor.
     
-    This creates a 360° rotary LiDAR suitable for SLAM and navigation applications.
+    This creates a PhysX-based rotating LiDAR suitable for SLAM and navigation applications.
+    PhysX LiDAR uses physics engine raycasting (lighter than RTX LiDAR) and allows
+    direct parameter control (FOV, resolution, rotation rate, valid range).
     
     Args:
         stage: USD stage
@@ -1228,6 +1247,11 @@ def create_rtx_lidar_on_robot(stage, robot_prim_path: str, lidar_name: str = "mi
         lidar_name: Name for the lidar sensor
         local_position: Local position offset from parent (x, y, z) in meters
         local_rotation: Local rotation offset from parent (roll, pitch, yaw) in degrees
+        fov: Field of view (horizontal, vertical) in degrees
+        resolution: Angular resolution (horizontal, vertical) in degrees
+        rotation_rate: Rotation rate in Hz (0 for static scan)
+        valid_range: Valid detection range (min, max) in meters
+        high_lod: Enable high LOD for 3D point cloud output
     
     Returns:
         str: Path to the created lidar prim, or None if creation failed
@@ -1257,55 +1281,65 @@ def create_rtx_lidar_on_robot(stage, robot_prim_path: str, lidar_name: str = "mi
     
     lidar_path = f"{parent_path}/{lidar_name}"
     
-    # Calculate orientation from local rotation (Euler angles to quaternion)
-    import math
-    roll = math.radians(local_rotation[0])
-    pitch = math.radians(local_rotation[1])
-    yaw = math.radians(local_rotation[2])
-    
-    # Euler to quaternion conversion (ZYX order)
-    cy = math.cos(yaw * 0.5)
-    sy = math.sin(yaw * 0.5)
-    cp = math.cos(pitch * 0.5)
-    sp = math.sin(pitch * 0.5)
-    cr = math.cos(roll * 0.5)
-    sr = math.sin(roll * 0.5)
-    
-    qw = cr * cp * cy + sr * sp * sy
-    qx = sr * cp * cy - cr * sp * sy
-    qy = cr * sp * cy + sr * cp * sy
-    qz = cr * cp * sy - sr * sp * cy
-    
     try:
-        # Execute the command to create the RTX LiDAR with Example_Rotary config
-        # This provides a 360° rotary LiDAR suitable for SLAM and navigation
-        print(f"[INFO] Creating RTX LiDAR with config: Example_Rotary")
+        # Create PhysX LiDAR using RangeSensorCreateLidar command
+        print(f"[INFO] Creating PhysX LiDAR: FOV=({fov[0]}, {fov[1]}), Resolution=({resolution[0]}, {resolution[1]}), RotRate={rotation_rate}Hz, Range=({valid_range[0]}, {valid_range[1]})m")
         
-        success, sensor = omni.kit.commands.execute(
-            "IsaacSensorCreateRtxLidar",
-            path=lidar_name,
-            parent=parent_path,
-            config="Example_Rotary",  # Built-in 360° rotary LiDAR config
-            translation=Gf.Vec3d(local_position[0], local_position[1], local_position[2]),
-            orientation=Gf.Quatd(qw, qx, qy, qz),
+        result, lidar_prim = omni.kit.commands.execute(
+            "RangeSensorCreateLidar",
+            path=lidar_path,
+            parent=None,
+            min_range=valid_range[0],
+            max_range=valid_range[1],
+            draw_points=False,
+            draw_lines=False,
+            horizontal_fov=fov[0],
+            vertical_fov=fov[1],
+            horizontal_resolution=resolution[0],
+            vertical_resolution=resolution[1],
+            rotation_rate=rotation_rate,
+            high_lod=high_lod,
+            yaw_offset=0.0,
+            enable_semantics=False,
         )
         
-        if success:
-            print(f"[INFO] Created RTX LiDAR at: {lidar_path}")
+        if result and lidar_prim:
+            # Set the local transform (position offset)
+            prim = stage.GetPrimAtPath(lidar_path)
+            if prim.IsValid():
+                prim.GetAttribute("xformOp:translate").Set(
+                    Gf.Vec3d(local_position[0], local_position[1], local_position[2])
+                )
+                # Set rotation if needed
+                if any(r != 0 for r in local_rotation):
+                    xform = UsdGeom.Xformable(prim)
+                    # Check if rotate ops exist, if not create them
+                    existing_ops = [op.GetOpType() for op in xform.GetOrderedXformOps()]
+                    if UsdGeom.XformOp.TypeRotateXYZ not in existing_ops:
+                        rotate_op = xform.AddRotateXYZOp()
+                        rotate_op.Set(Gf.Vec3f(local_rotation[0], local_rotation[1], local_rotation[2]))
+            
+            print(f"[INFO] Created PhysX LiDAR at: {lidar_path}")
+            print(f"[INFO] High LOD (3D point cloud): {high_lod}")
             return lidar_path
         else:
-            print(f"[ERROR] Failed to create RTX LiDAR")
+            print(f"[ERROR] Failed to create PhysX LiDAR")
             return None
             
     except Exception as e:
-        print(f"[ERROR] Failed to create RTX LiDAR: {e}")
+        print(f"[ERROR] Failed to create PhysX LiDAR: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 
-def setup_ros2_lidar_graph(lidar_prim_path: str, point_cloud_topic: str, 
-                           frame_id: str, domain_id: int = 0):
+def setup_ros2_physx_lidar_graph(lidar_prim_path: str, point_cloud_topic: str, 
+                                 frame_id: str, domain_id: int = 0):
     """
-    Setup OmniGraph for publishing RTX LiDAR data to ROS2 topics.
+    Setup OmniGraph for publishing PhysX LiDAR data to ROS2 topics.
+    
+    Uses IsaacReadLidarPointCloud to read PhysX LiDAR data and 
+    ROS2PublishPointCloud to publish PointCloud2 messages.
     
     Args:
         lidar_prim_path: Path to the lidar prim
@@ -1331,18 +1365,21 @@ def setup_ros2_lidar_graph(lidar_prim_path: str, point_cloud_topic: str,
         print(f"[DEBUG] No existing lidar graph to delete: {e}")
     
     # Try different node type naming conventions (new vs legacy)
+    # PhysX LiDAR uses IsaacReadLidarPointCloud + ROS2PublishPointCloud
     node_type_variants = [
         {
             "prefix": "isaacsim",
             "context": "isaacsim.ros2.bridge.ROS2Context",
-            "lidar_helper": "isaacsim.ros2.bridge.ROS2RtxLidarHelper",
-            "create_render_product": "isaacsim.core.nodes.IsaacCreateRenderProduct",
+            "read_lidar_pcl": "isaacsim.sensors.physx.IsaacReadLidarPointCloud",
+            "publish_pcl": "isaacsim.ros2.bridge.ROS2PublishPointCloud",
+            "read_sim_time": "isaacsim.core.nodes.IsaacReadSimulationTime",
         },
         {
             "prefix": "omni.isaac",
             "context": "omni.isaac.ros2_bridge.ROS2Context",
-            "lidar_helper": "omni.isaac.ros2_bridge.ROS2RtxLidarHelper",
-            "create_render_product": "omni.isaac.core_nodes.IsaacCreateRenderProduct",
+            "read_lidar_pcl": "omni.isaac.range_sensor.IsaacReadLidarPointCloud",
+            "publish_pcl": "omni.isaac.ros2_bridge.ROS2PublishPointCloud",
+            "read_sim_time": "omni.isaac.core_nodes.IsaacReadSimulationTime",
         },
     ]
     
@@ -1356,7 +1393,7 @@ def setup_ros2_lidar_graph(lidar_prim_path: str, point_cloud_topic: str,
             pass
         
         try:
-            print(f"[DEBUG] Trying lidar node types: {variant['context']}")
+            print(f"[DEBUG] Trying PhysX lidar node types: {variant['read_lidar_pcl']}")
             
             # Create the action graph
             (graph, nodes, _, _) = og.Controller.edit(
@@ -1365,46 +1402,47 @@ def setup_ros2_lidar_graph(lidar_prim_path: str, point_cloud_topic: str,
                     keys.CREATE_NODES: [
                         ("OnPlaybackTick", "omni.graph.action.OnPlaybackTick"),
                         ("ROS2Context", variant["context"]),
-                        ("CreateRenderProduct", variant["create_render_product"]),
-                        ("ROS2LidarHelper", variant["lidar_helper"]),
+                        ("ReadSimTime", variant["read_sim_time"]),
+                        ("ReadLidarPCL", variant["read_lidar_pcl"]),
+                        ("PublishPCL", variant["publish_pcl"]),
                     ],
                     keys.SET_VALUES: [
                         # ROS2 Context settings
                         ("ROS2Context.inputs:domain_id", domain_id),
                         ("ROS2Context.inputs:useDomainIDEnvVar", False),
                         
-                        # Render Product settings - use lidar prim as camera prim
-                        ("CreateRenderProduct.inputs:cameraPrim", lidar_prim_path),
-                        ("CreateRenderProduct.inputs:enabled", True),
+                        # PhysX LiDAR prim reference
+                        ("ReadLidarPCL.inputs:lidarPrim", [usdrt.Sdf.Path(lidar_prim_path)]),
                         
-                        # Lidar Helper settings for PointCloud2
-                        ("ROS2LidarHelper.inputs:type", "point_cloud"),
-                        ("ROS2LidarHelper.inputs:topicName", point_cloud_topic),
-                        ("ROS2LidarHelper.inputs:frameId", frame_id),
-                        ("ROS2LidarHelper.inputs:fullScan", False),  # Publish after full scan
+                        # Point cloud publisher settings
+                        ("PublishPCL.inputs:topicName", point_cloud_topic),
+                        ("PublishPCL.inputs:frameId", frame_id),
                     ],
                     keys.CONNECT: [
-                        # Connect tick to render product creation
-                        ("OnPlaybackTick.outputs:tick", "CreateRenderProduct.inputs:execIn"),
+                        # Connect tick to read lidar
+                        ("OnPlaybackTick.outputs:tick", "ReadLidarPCL.inputs:execIn"),
                         
-                        # Connect render product to lidar helper
-                        ("CreateRenderProduct.outputs:execOut", "ROS2LidarHelper.inputs:execIn"),
-                        ("CreateRenderProduct.outputs:renderProductPath", "ROS2LidarHelper.inputs:renderProductPath"),
+                        # Connect lidar output to publisher
+                        ("ReadLidarPCL.outputs:execOut", "PublishPCL.inputs:execIn"),
+                        ("ReadLidarPCL.outputs:data", "PublishPCL.inputs:data"),
+                        
+                        # Connect simulation time to publisher
+                        ("ReadSimTime.outputs:simulationTime", "PublishPCL.inputs:timeStamp"),
                         
                         # Connect ROS2 context
-                        ("ROS2Context.outputs:context", "ROS2LidarHelper.inputs:context"),
+                        ("ROS2Context.outputs:context", "PublishPCL.inputs:context"),
                     ],
                 },
             )
             
-            print(f"[INFO] Created ROS2 LiDAR graph at: {graph_path}")
+            print(f"[INFO] Created ROS2 PhysX LiDAR graph at: {graph_path}")
             print(f"[INFO] Point cloud topic: {point_cloud_topic}")
             
             return graph
             
         except Exception as e:
             last_error = e
-            print(f"[DEBUG] Failed with lidar node types {variant['context']}: {e}")
+            print(f"[DEBUG] Failed with PhysX lidar node types {variant['read_lidar_pcl']}: {e}")
             # Try to clean up the partially created graph
             try:
                 og.Controller.delete_graph(graph_path)
@@ -1413,7 +1451,7 @@ def setup_ros2_lidar_graph(lidar_prim_path: str, point_cloud_topic: str,
             continue
     
     # If all variants failed, raise the last error
-    raise RuntimeError(f"Failed to create ROS2 LiDAR graph with any node type variant. Last error: {last_error}")
+    raise RuntimeError(f"Failed to create ROS2 PhysX LiDAR graph with any node type variant. Last error: {last_error}")
 
 
 def setup_ros2_camera_graph(camera_prim_path: str, rgb_topic: str, depth_topic: str, 
@@ -1677,14 +1715,19 @@ def main():
         else:
             print("[WARN] Camera creation failed, skipping ROS2 camera publishing setup")
         
-        # Create RTX LiDAR on the robot if enabled
+        # Create PhysX LiDAR on the robot if enabled
         if args_cli.enable_lidar:
-            lidar_path = create_rtx_lidar_on_robot(
+            lidar_path = create_physx_lidar_on_robot(
                 stage=current_stage,
                 robot_prim_path=robot_prim_path,
                 lidar_name="mid360_lidar",
                 local_position=(0.0, 0.0, 1.0),  # 机器人 pelvis 上方 1.0m
                 local_rotation=(0.0, 0.0, 0.0),
+                fov=tuple(args_cli.lidar_fov),
+                resolution=tuple(args_cli.lidar_resolution),
+                rotation_rate=args_cli.lidar_rotation_rate,
+                valid_range=tuple(args_cli.lidar_valid_range),
+                high_lod=args_cli.lidar_high_lod,
             )
             
             # Update simulation to initialize the lidar
@@ -1693,23 +1736,23 @@ def main():
             if lidar_path:
                 # Setup ROS2 LiDAR publishing graph
                 try:
-                    ros2_lidar_graph = setup_ros2_lidar_graph(
+                    ros2_lidar_graph = setup_ros2_physx_lidar_graph(
                         lidar_prim_path=lidar_path,
                         point_cloud_topic=args_cli.lidar_topic,
                         frame_id=args_cli.lidar_frame_id,
                         domain_id=args_cli.ros2_domain_id
                     )
-                    print("[INFO] ROS2 LiDAR publishing enabled successfully!")
+                    print("[INFO] ROS2 PhysX LiDAR publishing enabled successfully!")
                     print(f"[INFO] LiDAR Point Cloud topic: {args_cli.lidar_topic}")
                     print(f"[INFO] To view point cloud: ros2 topic echo {args_cli.lidar_topic}")
                     print(f"[INFO] To visualize in RViz2: Add PointCloud2 display with topic {args_cli.lidar_topic}")
                 except Exception as e:
-                    print(f"[ERROR] Failed to setup ROS2 LiDAR graph: {e}")
+                    print(f"[ERROR] Failed to setup ROS2 PhysX LiDAR graph: {e}")
                     print("[WARN] Continuing without ROS2 LiDAR publishing...")
             else:
-                print("[WARN] LiDAR creation failed, skipping ROS2 LiDAR publishing setup")
+                print("[WARN] PhysX LiDAR creation failed, skipping ROS2 LiDAR publishing setup")
         else:
-            print("[INFO] LiDAR disabled. Use --enable_lidar to enable RTX LiDAR sensor.")
+            print("[INFO] LiDAR disabled. Use --enable_lidar to enable PhysX LiDAR sensor.")
 
         # Setup ROS2 cmd_vel subscriber if enabled
         if args_cli.enable_cmd_vel:
