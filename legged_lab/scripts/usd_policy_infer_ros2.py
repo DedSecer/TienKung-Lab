@@ -41,10 +41,10 @@ CAMERA_CONFIG = {
 LIDAR_CONFIG = {
     "topic": "/point_cloud",
     "frame_id": "lidar_frame",
-    "fov": (360.0, 30.0),
-    "resolution": (0.4, 4.0),
-    "rotation_rate": 20.0,
-    "valid_range": (0.4, 100.0),
+    "fov": (360.0, 50.0),
+    "resolution": (0.4, 0.8),
+    "rotation_rate": 10.0,
+    "valid_range": (0.05, 20.0),
     "high_lod": True,
 }
 
@@ -197,7 +197,7 @@ def main():
         stage=current_stage,
         robot_prim_path=robot_prim_path,
         lidar_name="mid360_lidar",
-        local_position=(0.0, 0.0, 1.0),
+        local_position=(0.15, 0.0, 0.6),
         local_rotation=(0.0, 0.0, 0.0),
         fov=LIDAR_CONFIG["fov"],
         resolution=LIDAR_CONFIG["resolution"],
