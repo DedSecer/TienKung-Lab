@@ -24,53 +24,67 @@ from isaaclab.app import AppLauncher
 
 from legged_lab.utils import task_registry
 
+# ROS2 configuration constants
+ROS2_DOMAIN_ID = 0
+
+# Camera configuration constants
+CAMERA_CONFIG = {
+    "rgb_topic": "/camera/color/image_rect_color",
+    "depth_topic": "/depth",
+    "camera_info_topic": "/camera_info",
+    "frame_id": "robot_camera",
+    "width": 640,
+    "height": 480,
+}
+
+# PhysX LiDAR configuration constants
+LIDAR_CONFIG = {
+    "topic": "/point_cloud",
+    "frame_id": "lidar_frame",
+    "fov": (360.0, 30.0),
+    "resolution": (0.4, 4.0),
+    "rotation_rate": 20.0,
+    "valid_range": (0.4, 100.0),
+    "high_lod": True,
+}
+
+# ROS2 cmd_vel subscriber configuration constants
+CMD_VEL_CONFIG = {
+    "topic": "/cmd_vel",
+    "max_lin_vel_x": 1.0,
+    "max_lin_vel_y": 0.5,
+    "max_ang_vel_z": 1.57,
+    "lin_vel_gain": 1.0,
+    "ang_vel_gain": 1.0,
+}
+
+# High-frequency IMU publisher configuration constants
+IMU_CONFIG = {
+    "topic": "/imu/data",
+    "frame_id": "imu_link",
+    "publish_rate": 60.0,
+}
+
+# Odom TF publisher configuration constants
+ODOM_TF_CONFIG = {
+    "topic": "/tf",
+    "odom_frame_id": "odom",
+    "base_frame_id": "base_link",
+    "publish_rate": 60.0,
+}
+
+# Clock publisher configuration constants
+CLOCK_CONFIG = {
+    "topic": "/clock",
+    "publish_rate": 100.0,
+}
+
 # add argparse arguments
 parser = argparse.ArgumentParser(description="Policy inference for TienKung robot in a USD environment with ROS2 camera publishing.")
 parser.add_argument("--task", type=str, default="walk", help="Name of the task.")
 parser.add_argument("--policy_path", type=str, help="Path to model checkpoint exported as jit.", required=True)
 parser.add_argument("--usd_path", type=str, default="../sense/museum/museum.usd", help="Path to custom USD environment file (default: ../sense/museum/museum.usd).")
-parser.add_argument("--num_envs", type=int, default=1, help="Number of environments to simulate.")
 parser.add_argument("--seed", type=int, default=None, help="Seed used for the environment")
-# ROS2 camera configuration
-parser.add_argument("--rgb_topic", type=str, default="/camera/color/image_rect_color", help="ROS2 topic name for RGB image.")
-parser.add_argument("--depth_topic", type=str, default="/depth", help="ROS2 topic name for depth image.")
-parser.add_argument("--camera_info_topic", type=str, default="/camera_info", help="ROS2 topic name for camera info.")
-parser.add_argument("--camera_frame_id", type=str, default="robot_camera", help="Frame ID for camera messages.")
-parser.add_argument("--camera_width", type=int, default=640, help="Camera image width.")
-parser.add_argument("--camera_height", type=int, default=480, help="Camera image height.")
-parser.add_argument("--ros2_domain_id", type=int, default=0, help="ROS2 domain ID.")
-# PhysX LiDAR configuration
-parser.add_argument("--enable_lidar", action=argparse.BooleanOptionalAction, default=True, help="Enable PhysX LiDAR sensor (enabled by default, use --no-enable_lidar to disable).")
-parser.add_argument("--lidar_topic", type=str, default="/point_cloud", help="ROS2 topic name for LiDAR point cloud.")
-parser.add_argument("--lidar_frame_id", type=str, default="lidar_frame", help="Frame ID for LiDAR messages.")
-parser.add_argument("--lidar_fov", type=float, nargs=2, default=[360.0, 30.0], help="PhysX LiDAR field of view [horizontal, vertical] in degrees (default: 360.0 30.0).")
-parser.add_argument("--lidar_resolution", type=float, nargs=2, default=[0.4, 4.0], help="PhysX LiDAR resolution [horizontal, vertical] in degrees (default: 0.4 4.0).")
-parser.add_argument("--lidar_rotation_rate", type=float, default=20.0, help="PhysX LiDAR rotation rate in Hz (default: 20.0). Set to 0 for static scan.")
-parser.add_argument("--lidar_valid_range", type=float, nargs=2, default=[0.4, 100.0], help="PhysX LiDAR valid range [min, max] in meters (default: 0.4 100.0).")
-parser.add_argument("--lidar_high_lod", action="store_true", default=True, help="Enable high LOD for 3D point cloud output (default: True).")
-# ROS2 cmd_vel subscriber configuration
-parser.add_argument("--enable_cmd_vel", action="store_true", help="Enable ROS2 cmd_vel subscriber for velocity control.")
-parser.add_argument("--cmd_vel_topic", type=str, default="/cmd_vel", help="ROS2 topic name for velocity commands (geometry_msgs/Twist).")
-parser.add_argument("--max_lin_vel_x", type=float, default=1.0, help="Maximum linear velocity in x direction (m/s).")
-parser.add_argument("--max_lin_vel_y", type=float, default=0.5, help="Maximum linear velocity in y direction (m/s).")
-parser.add_argument("--max_ang_vel_z", type=float, default=1.57, help="Maximum angular velocity around z axis (rad/s).")
-parser.add_argument("--lin_vel_gain", type=float, default=1.0, help="Gain multiplier for linear velocity commands (default: 1.0). Increase for more responsive movement.")
-parser.add_argument("--ang_vel_gain", type=float, default=1.0, help="Gain multiplier for angular velocity commands (default: 1.0). Increase for fuller turns.")
-# High-frequency IMU publisher configuration
-parser.add_argument("--enable_high_freq_imu", action=argparse.BooleanOptionalAction, default=True, help="Enable high-frequency IMU publisher (enabled by default, use --no-enable_high_freq_imu to disable).")
-parser.add_argument("--imu_topic", type=str, default="/imu/data", help="ROS2 topic name for high-frequency IMU data.")
-parser.add_argument("--imu_frame_id", type=str, default="imu_link", help="Frame ID for IMU messages.")
-parser.add_argument("--imu_publish_rate", type=float, default=60.0, help="IMU publish rate in Hz (default: 60Hz).")
-# Odom TF publisher configuration
-parser.add_argument("--enable_odom_tf", action=argparse.BooleanOptionalAction, default=True, help="Enable odom->base_link TF publisher (enabled by default, use --no-enable_odom_tf to disable).")
-parser.add_argument("--odom_tf_topic", type=str, default="/tf", help="ROS2 topic name for odom TF (geometry_msgs/TransformStamped).")
-parser.add_argument("--odom_frame_id", type=str, default="odom", help="Frame ID for odom frame.")
-parser.add_argument("--base_frame_id", type=str, default="base_link", help="Frame ID for robot base frame.")
-parser.add_argument("--odom_tf_publish_rate", type=float, default=60.0, help="Odom TF publish rate in Hz (default: 60Hz).")
-# Clock publisher configuration
-parser.add_argument("--enable_clock", action=argparse.BooleanOptionalAction, default=True, help="Enable /clock topic publisher (enabled by default, use --no-enable_clock to disable).")
-parser.add_argument("--clock_topic", type=str, default="/clock", help="ROS2 topic name for simulation clock.")
-parser.add_argument("--clock_publish_rate", type=float, default=100.0, help="Clock publish rate in Hz (default: 100Hz).")
 
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
@@ -136,7 +150,7 @@ def main():
     temp_usd_path = prepare_usd_stage(usd_path)
 
     # configure environment for USD inference
-    configure_env_for_usd(env_cfg, temp_usd_path, num_envs=args_cli.num_envs,
+    configure_env_for_usd(env_cfg, temp_usd_path, num_envs=1,
                             seed=args_cli.seed, device=device)
 
     # create environment
@@ -158,103 +172,97 @@ def main():
         camera_name="head_camera",
         local_position=(0.3, 0.0, 0.65),
         local_rotation=(90.0, -90.0, 0.0),
-        width=args_cli.camera_width,
-        height=args_cli.camera_height
+        width=CAMERA_CONFIG["width"],
+        height=CAMERA_CONFIG["height"]
     )
 
     # Setup ROS2 camera publishing graph
     ros2_graph = setup_ros2_camera_graph(
         camera_prim_path=camera_path,
-        rgb_topic=args_cli.rgb_topic,
-        depth_topic=args_cli.depth_topic,
-        camera_info_topic=args_cli.camera_info_topic,
-        frame_id=args_cli.camera_frame_id,
-        width=args_cli.camera_width,
-        height=args_cli.camera_height,
-        domain_id=args_cli.ros2_domain_id
+        rgb_topic=CAMERA_CONFIG["rgb_topic"],
+        depth_topic=CAMERA_CONFIG["depth_topic"],
+        camera_info_topic=CAMERA_CONFIG["camera_info_topic"],
+        frame_id=CAMERA_CONFIG["frame_id"],
+        width=CAMERA_CONFIG["width"],
+        height=CAMERA_CONFIG["height"],
+        domain_id=ROS2_DOMAIN_ID
     )
     print("[INFO] ROS2 camera publishing enabled successfully!")
-    print(f"[INFO] Topics: {args_cli.rgb_topic}, {args_cli.depth_topic}, {args_cli.camera_info_topic}")
+    print(f"[INFO] Topics: {CAMERA_CONFIG['rgb_topic']}, {CAMERA_CONFIG['depth_topic']}, {CAMERA_CONFIG['camera_info_topic']}")
     print(f"[INFO] To view topics, run: ros2 topic list")
-    print(f"[INFO] To view RGB image: ros2 run rqt_image_view rqt_image_view {args_cli.rgb_topic}")
+    print(f"[INFO] To view RGB image: ros2 run rqt_image_view rqt_image_view {CAMERA_CONFIG['rgb_topic']}")
 
-    # Create PhysX LiDAR on the robot if enabled
-    if args_cli.enable_lidar:
-        lidar_path = create_physx_lidar_on_robot(
-            stage=current_stage,
-            robot_prim_path=robot_prim_path,
-            lidar_name="mid360_lidar",
-            local_position=(0.0, 0.0, 1.0),
-            local_rotation=(0.0, 0.0, 0.0),
-            fov=tuple(args_cli.lidar_fov),
-            resolution=tuple(args_cli.lidar_resolution),
-            rotation_rate=args_cli.lidar_rotation_rate,
-            valid_range=tuple(args_cli.lidar_valid_range),
-            high_lod=args_cli.lidar_high_lod,
-        )
+    # Create PhysX LiDAR on the robot
+    lidar_path = create_physx_lidar_on_robot(
+        stage=current_stage,
+        robot_prim_path=robot_prim_path,
+        lidar_name="mid360_lidar",
+        local_position=(0.0, 0.0, 1.0),
+        local_rotation=(0.0, 0.0, 0.0),
+        fov=LIDAR_CONFIG["fov"],
+        resolution=LIDAR_CONFIG["resolution"],
+        rotation_rate=LIDAR_CONFIG["rotation_rate"],
+        valid_range=LIDAR_CONFIG["valid_range"],
+        high_lod=LIDAR_CONFIG["high_lod"],
+    )
 
-        # Setup ROS2 LiDAR publishing graph
-        ros2_lidar_graph = setup_ros2_physx_lidar_graph(
-            lidar_prim_path=lidar_path,
-            point_cloud_topic=args_cli.lidar_topic,
-            frame_id=args_cli.lidar_frame_id,
-            domain_id=args_cli.ros2_domain_id
-        )
-        print("[INFO] ROS2 PhysX LiDAR publishing enabled successfully!")
-        print(f"[INFO] LiDAR Point Cloud topic: {args_cli.lidar_topic}")
-        print(f"[INFO] To view point cloud: ros2 topic echo {args_cli.lidar_topic}")
-        print(f"[INFO] To visualize in RViz2: Add PointCloud2 display with topic {args_cli.lidar_topic}")
+    # Setup ROS2 LiDAR publishing graph
+    ros2_lidar_graph = setup_ros2_physx_lidar_graph(
+        lidar_prim_path=lidar_path,
+        point_cloud_topic=LIDAR_CONFIG["topic"],
+        frame_id=LIDAR_CONFIG["frame_id"],
+        domain_id=ROS2_DOMAIN_ID
+    )
+    print("[INFO] ROS2 PhysX LiDAR publishing enabled successfully!")
+    print(f"[INFO] LiDAR Point Cloud topic: {LIDAR_CONFIG['topic']}")
+    print(f"[INFO] To view point cloud: ros2 topic echo {LIDAR_CONFIG['topic']}")
+    print(f"[INFO] To visualize in RViz2: Add PointCloud2 display with topic {LIDAR_CONFIG['topic']}")
 
+    # Setup ROS2 cmd_vel subscriber
+    cmd_vel_subscriber = CmdVelSubscriber(
+        topic_name=CMD_VEL_CONFIG["topic"],
+        max_lin_vel_x=CMD_VEL_CONFIG["max_lin_vel_x"],
+        max_lin_vel_y=CMD_VEL_CONFIG["max_lin_vel_y"],
+        max_ang_vel_z=CMD_VEL_CONFIG["max_ang_vel_z"],
+        domain_id=ROS2_DOMAIN_ID
+    )
+    print("[INFO] ROS2 cmd_vel subscriber enabled successfully!")
+    print(f"[INFO] Subscribing to topic: {CMD_VEL_CONFIG['topic']}")
+    print(f"[INFO] To send velocity commands: ros2 topic pub {CMD_VEL_CONFIG['topic']} geometry_msgs/msg/Twist '{{linear: {{x: 0.5, y: 0.0, z: 0.0}}, angular: {{x: 0.0, y: 0.0, z: 0.2}}}}'")
+    print(f"[INFO] Or use teleop_twist_keyboard: ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args -r /cmd_vel:={CMD_VEL_CONFIG['topic']}")
 
-    # Setup ROS2 cmd_vel subscriber if enabled
-    if args_cli.enable_cmd_vel:
-        cmd_vel_subscriber = CmdVelSubscriber(
-            topic_name=args_cli.cmd_vel_topic,
-            max_lin_vel_x=args_cli.max_lin_vel_x,
-            max_lin_vel_y=args_cli.max_lin_vel_y,
-            max_ang_vel_z=args_cli.max_ang_vel_z,
-            domain_id=args_cli.ros2_domain_id
-        )
-        print("[INFO] ROS2 cmd_vel subscriber enabled successfully!")
-        print(f"[INFO] Subscribing to topic: {args_cli.cmd_vel_topic}")
-        print(f"[INFO] To send velocity commands: ros2 topic pub {args_cli.cmd_vel_topic} geometry_msgs/msg/Twist '{{linear: {{x: 0.5, y: 0.0, z: 0.0}}, angular: {{x: 0.0, y: 0.0, z: 0.2}}}}'")
-        print(f"[INFO] Or use teleop_twist_keyboard: ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args -r /cmd_vel:={args_cli.cmd_vel_topic}")
+    # Setup high-frequency IMU publisher
+    imu_publisher = HighFreqImuPublisher(
+        topic_name=IMU_CONFIG["topic"],
+        frame_id=IMU_CONFIG["frame_id"],
+        publish_rate=IMU_CONFIG["publish_rate"],
+        domain_id=ROS2_DOMAIN_ID
+    )
+    print("[INFO] High-frequency IMU publisher enabled successfully!")
+    print(f"[INFO] Publishing to topic: {IMU_CONFIG['topic']} at {IMU_CONFIG['publish_rate']} Hz")
+    print(f"[INFO] To check IMU frequency: ros2 topic hz {IMU_CONFIG['topic']}")
 
-    # Setup high-frequency IMU publisher if enabled
-    if args_cli.enable_high_freq_imu:
-        imu_publisher = HighFreqImuPublisher(
-            topic_name=args_cli.imu_topic,
-            frame_id=args_cli.imu_frame_id,
-            publish_rate=args_cli.imu_publish_rate,
-            domain_id=args_cli.ros2_domain_id
-        )
-        print("[INFO] High-frequency IMU publisher enabled successfully!")
-        print(f"[INFO] Publishing to topic: {args_cli.imu_topic} at {args_cli.imu_publish_rate} Hz")
-        print(f"[INFO] To check IMU frequency: ros2 topic hz {args_cli.imu_topic}")
+    # Setup odom TF publisher
+    odom_tf_publisher = OdomTFPublisher(
+        topic_name=ODOM_TF_CONFIG["topic"],
+        odom_frame_id=ODOM_TF_CONFIG["odom_frame_id"],
+        base_frame_id=ODOM_TF_CONFIG["base_frame_id"],
+        publish_rate=ODOM_TF_CONFIG["publish_rate"],
+        domain_id=ROS2_DOMAIN_ID
+    )
+    print("[INFO] Odom TF publisher enabled successfully!")
+    print(f"[INFO] Publishing TF {ODOM_TF_CONFIG['odom_frame_id']} -> {ODOM_TF_CONFIG['base_frame_id']} at {ODOM_TF_CONFIG['publish_rate']} Hz")
+    print(f"[INFO] To view TF tree: ros2 run tf2_tools view_frames")
 
-    # Setup odom TF publisher if enabled
-    if args_cli.enable_odom_tf:
-        odom_tf_publisher = OdomTFPublisher(
-            topic_name=args_cli.odom_tf_topic,
-            odom_frame_id=args_cli.odom_frame_id,
-            base_frame_id=args_cli.base_frame_id,
-            publish_rate=args_cli.odom_tf_publish_rate,
-            domain_id=args_cli.ros2_domain_id
-        )
-        print("[INFO] Odom TF publisher enabled successfully!")
-        print(f"[INFO] Publishing TF {args_cli.odom_frame_id} -> {args_cli.base_frame_id} at {args_cli.odom_tf_publish_rate} Hz")
-        print(f"[INFO] To view TF tree: ros2 run tf2_tools view_frames")
-
-    # Setup clock publisher if enabled
-    if args_cli.enable_clock:
-        clock_publisher = ClockPublisher(
-            topic_name=args_cli.clock_topic,
-            publish_rate=args_cli.clock_publish_rate,
-            domain_id=args_cli.ros2_domain_id
-        )
-        print("[INFO] Clock publisher enabled successfully!")
-        print(f"[INFO] Publishing simulation time to topic: {args_cli.clock_topic} at {args_cli.clock_publish_rate} Hz")
-        print("[INFO] ROS2 nodes should use 'use_sim_time:=true' to synchronize with simulation")
+    # Setup clock publisher
+    clock_publisher = ClockPublisher(
+        topic_name=CLOCK_CONFIG["topic"],
+        publish_rate=CLOCK_CONFIG["publish_rate"],
+        domain_id=ROS2_DOMAIN_ID
+    )
+    print("[INFO] Clock publisher enabled successfully!")
+    print(f"[INFO] Publishing simulation time to topic: {CLOCK_CONFIG['topic']} at {CLOCK_CONFIG['publish_rate']} Hz")
+    print("[INFO] ROS2 nodes should use 'use_sim_time:=true' to synchronize with simulation")
 
     # setup keyboard control if not headless
     if not args_cli.headless:
@@ -275,9 +283,9 @@ def main():
 
                 # Apply gains to improve responsiveness for Nav2
                 # Nav2 often outputs small velocities that RL policies might ignore
-                lin_vel_x *= args_cli.lin_vel_gain
-                lin_vel_y *= args_cli.lin_vel_gain
-                ang_vel_z *= args_cli.ang_vel_gain
+                lin_vel_x *= CMD_VEL_CONFIG["lin_vel_gain"]
+                lin_vel_y *= CMD_VEL_CONFIG["lin_vel_gain"]
+                ang_vel_z *= CMD_VEL_CONFIG["ang_vel_gain"]
 
                 # Simple deadzone to avoid drift
                 if abs(lin_vel_x) < 0.01: lin_vel_x = 0.0
