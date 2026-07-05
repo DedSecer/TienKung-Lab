@@ -49,7 +49,7 @@ from legged_lab.envs.base.base_config import (
     SimCfg,
 )
 from legged_lab.sensors.camera.camera_cfgs import TiledD455CameraCfg
-from legged_lab.sensors.lidar.lidat_cfg import LidarCfg
+from legged_lab.sensors.lidar.lidar_cfg import LidarCfg
 from legged_lab.terrains import GRAVEL_TERRAINS_CFG, ROUGH_TERRAINS_CFG  # noqa:F401
 
 

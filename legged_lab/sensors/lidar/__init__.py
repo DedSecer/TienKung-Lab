@@ -16,4 +16,4 @@
 # with additional modifications by the TienKung-Lab Project,
 # and is distributed under the BSD-3-Clause license.
 
-from .lidat_cfg import LidarCfg
+from .lidar_cfg import LidarCfg
